@@ -50,6 +50,8 @@ type install =
 
 and manager = Poetry | Pdm
 
+type inputs = Whole_source | Manifests of string list
+
 type application = {
   platforms : Platforms.t;
   requirements : Version.requirement list;
@@ -59,6 +61,8 @@ type application = {
   manager_version : Version.version option;
   fingerprint : string;
   install : install;
+  inputs : inputs;
+  installable : bool;
   start : Build_plan.argv option;
   build : Build_plan.operation list;
   install_override : Build_plan.argv option;
@@ -82,9 +86,9 @@ type resolution = {
 
 let project source path =
   let* document = Toml.read source path in
-  let* () = Python_sources.project source path document in
+  let* local = Python_sources.project source path document in
   let+ required = Toml.string document [ "project"; "requires-python" ] in
-  (path, (document, required))
+  (path, (document, required, local))
 
 let root_manager document =
   let* poetry = Toml.field document [ "tool"; "poetry" ] Otoml.get_value in
@@ -206,9 +210,12 @@ let lock_references source manager path document =
         []
   in
   let references = collect "" document in
-  Support.iter
-    (Python_sources.reference ~project_root:(manager = Pdm) source ~from:path)
-    references
+  let+ local =
+    Support.traverse
+      (Python_sources.reference ~project_root:(manager = Pdm) source ~from:path)
+      references
+  in
+  List.exists Fun.id local
 
 let lock_requirements source lock =
   let* format =
@@ -225,12 +232,17 @@ let lock_requirements source lock =
         (fun name -> Toml.string package [ "source"; name ])
         [ "editable"; "directory"; "virtual" ]
     in
-    Support.iter
-      (Source.check_reference source ~from:"uv.lock")
-      (List.filter_map Fun.id paths)
+    let paths = List.filter_map Fun.id paths in
+    let* () =
+      Support.iter (Source.check_reference source ~from:"uv.lock") paths
+    in
+    let+ file = Toml.field package [ "source"; "path" ] Otoml.get_value in
+    (* The root project is installed separately, after the source copy. *)
+    Option.is_some file || List.exists (( <> ) ".") paths
   in
-  let* () = Support.iter check_package packages in
-  Toml.string lock [ "requires-python" ]
+  let* local = Support.traverse check_package packages in
+  let+ requires = Toml.string lock [ "requires-python" ] in
+  (requires, List.exists Fun.id local)
 
 let uv_declarations request source root =
   let* uv_requirement = Toml.string root [ "tool"; "uv"; "required-version" ] in
@@ -248,6 +260,32 @@ let uv_declarations request source root =
           Request.defaults request "uv" [] )
   in
   Ok (declarations, parse)
+
+let install_inputs source install ~requirements ~project ~lock ~uv_local =
+  let present = List.filter (Source.has source) in
+  let manifests local paths =
+    if local || source.Source.links then Whole_source
+    else Manifests (List.sort_uniq String.compare paths)
+  in
+  match install with
+  | Pip_install { project = true; _ }
+  | Manager_install { install_root = true; _ } ->
+      Whole_source
+  | Pip_install { project = false; _ } ->
+      manifests requirements.Python_sources.local
+        requirements.Python_sources.included
+  | Uv_install _ ->
+      manifests
+        (project || lock || uv_local)
+        ("pyproject.toml" :: "uv.lock"
+        :: present [ "uv.toml"; ".python-version" ])
+  | Manager_install { manager; install_root = false; _ } ->
+      manifests (project || lock)
+        ("pyproject.toml"
+        :: present
+             (match manager with
+             | Poetry -> [ "poetry.lock"; "poetry.toml" ]
+             | Pdm -> [ "pdm.lock"; "pdm.toml" ]))
 
 let load request source =
   let* () =
@@ -267,8 +305,10 @@ let load request source =
          (fun path -> Filename.basename path = "pyproject.toml")
          source.Source.files)
   in
-  let root =
-    Option.fold ~none:(Otoml.TomlTable []) ~some:fst
+  let root, root_local =
+    Option.fold
+      ~none:(Otoml.TomlTable [], false)
+      ~some:(fun (document, _, local) -> (document, local))
       (List.assoc_opt "pyproject.toml" projects)
   in
   let* manager, has_lock = manager_selection source root in
@@ -277,19 +317,19 @@ let load request source =
     | None -> Ok ()
     | Some manager -> validate_manager_metadata manager root
   in
-  let* () = Python_sources.requirements source in
+  let* pip_requirements = Python_sources.requirements source in
   let* lock =
     if Source.has source "uv.lock" then
       let+ document = Toml.read source "uv.lock" in
       Some document
     else Ok None
   in
-  let* lock_requires =
+  let* lock_requires, uv_lock_local =
     match lock with
-    | None -> Ok None
+    | None -> Ok (None, false)
     | Some lock -> lock_requirements source lock
   in
-  let* () =
+  let* manager_lock_local =
     match manager with
     | Some manager when has_lock ->
         let path =
@@ -297,12 +337,12 @@ let load request source =
         in
         let* document = Toml.read source path in
         lock_references source manager path document
-    | Some _ | None -> Ok ()
+    | Some _ | None -> Ok false
   in
   let project_declarations =
     Package.optional "uv.lock requires-python" lock_requires
     @ List.concat_map
-        (fun (path, (_, requirement)) ->
+        (fun (path, (_, requirement, _)) ->
           Package.optional (path ^ " project.requires-python") requirement)
         projects
   in
@@ -387,6 +427,19 @@ let load request source =
         Option.value ~default:(Option.is_some build_system) uv_package
     | Manager_install { install_root; _ } -> install_root
   in
+  let* workspace =
+    Toml.field root [ "tool"; "uv"; "workspace" ] Otoml.get_value
+  in
+  (* uv builds the root project to read dynamic metadata. *)
+  let* dynamic = Toml.field root [ "project"; "dynamic" ] Otoml.get_value in
+  let inputs =
+    if Option.is_some request.Request.install then Whole_source
+    else
+      install_inputs source install ~requirements:pip_requirements
+        ~project:root_local
+        ~lock:(uv_lock_local || manager_lock_local)
+        ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
+  in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
   in
@@ -441,6 +494,8 @@ let load request source =
       manager_version = Option.map snd manager_version;
       fingerprint;
       install;
+      inputs;
+      installable;
       start;
       install_override = request.Request.install;
       build = Request.build_command request None;
@@ -562,7 +617,7 @@ let legacy _ _ = Error Error.Invalid_resolution
 
 let manager_setup app resolved name version checks install =
   match app.install_override with
-  | Some _ -> Ok ([], [], [])
+  | Some _ -> Ok ([], [], [], [])
   | None ->
       let open Build_plan in
       let* venv = run [ "python"; "-m"; "venv"; "/opt/kiln-tools" ] in
@@ -596,11 +651,14 @@ let manager_setup app resolved name version checks install =
       Ok
         ( [ copy tools [ "/opt/kiln-tools/" ] "/opt/kiln-tools/" ],
           defaults,
+          [],
           env_values )
+
+module Directories = Map.Make (String)
 
 let plan app resolved =
   let open Build_plan in
-  let* setup, defaults, manager_environment =
+  let* setup, defaults, finish, manager_environment =
     match (app.install, resolved.installer) with
     | Pip_install install, Pip ->
         let pip args =
@@ -611,7 +669,7 @@ let plan app resolved =
            else [])
           @ if install.project then [ pip [ "." ] ] else []
         in
-        Ok ([], defaults, [])
+        Ok ([], defaults, [], [])
     | Uv_install _, Uv uv ->
         let* uv_stage = stage (Image uv.image) [] in
         let* env =
@@ -622,20 +680,22 @@ let plan app resolved =
               ("UV_LINK_MODE", "copy");
             ]
         in
+        let sync options =
+          [ "uv"; "sync"; "--locked"; "--no-dev" ]
+          @ options
+          @ [ "--python"; "/usr/local/bin/python"; "--no-managed-python" ]
+        in
+        let defaults, finish =
+          match app.inputs with
+          | Whole_source -> ([ sync [ "--no-editable" ] ], [])
+          | Manifests _ ->
+              ( [ sync [ "--no-install-project" ] ],
+                if app.installable then [ sync [ "--no-editable" ] ] else [] )
+        in
         Ok
           ( [ copy uv_stage [ "/uv" ] "/usr/local/bin/uv"; Env env ],
-            [
-              [
-                "uv";
-                "sync";
-                "--locked";
-                "--no-dev";
-                "--no-editable";
-                "--python";
-                "/usr/local/bin/python";
-                "--no-managed-python";
-              ];
-            ],
+            defaults,
+            finish,
             [] )
     | Manager_install { manager = Poetry; lock; install_root }, Poetry_tool tool
       ->
@@ -662,6 +722,7 @@ let plan app resolved =
     | Some argv -> Ok [ Run argv ]
     | None -> Support.traverse run defaults
   in
+  let* finish = Support.traverse run finish in
   let manager_path =
     match app.install with
     | Manager_install _ when Option.is_none app.install_override ->
@@ -680,10 +741,27 @@ let plan app resolved =
        ]
       @ manager_environment)
   in
+  let copy_source = Source.copy ~exclude [ "." ] "/app/" in
+  let prefix, copies, source =
+    match app.inputs with
+    | Whole_source -> ([ copy_source ], [], [])
+    | Manifests paths ->
+        let directories =
+          List.fold_left
+            (fun groups path ->
+              Directories.add_to_list (Filename.dirname path) path groups)
+            Directories.empty paths
+        in
+        ( [],
+          List.map
+            (fun (dir, paths) -> context (List.rev paths) ("/app/" ^ dir ^ "/"))
+            (Directories.bindings directories),
+          copy_source :: finish )
+  in
   let* builder =
     stage (Image resolved.builder)
-      ([ Workdir "/app"; Env env; Source.copy ~exclude [ "." ] "/app/" ]
-      @ [ venv ] @ setup @ commands @ app.build)
+      ([ Workdir "/app"; Env env ]
+      @ prefix @ copies @ [ venv ] @ setup @ commands @ source @ app.build)
   in
   stage (Image resolved.runtime)
     [

@@ -56,12 +56,27 @@ let reference ?(project_root = false) source ~from text =
       Json.metadata from
         "encoded or variable local paths are unsupported; use a plain relative \
          path"
-    else Source.check_reference source ~from text
-  else Ok ()
+    else
+      let+ () = Source.check_reference source ~from text in
+      true
+  else Ok false
 
 type requirement_option = Include_file | Local_dependency
 
 module Paths = Set.Make (String)
+
+type requirements = { included : string list; local : bool }
+
+let normalize path =
+  List.fold_left
+    (fun parts part ->
+      match (part, parts) with
+      | ("" | "."), _ -> parts
+      | "..", _ :: rest -> rest
+      | _ -> part :: parts)
+    []
+    (String.split_on_char '/' path)
+  |> List.rev |> String.concat "/"
 
 let requirements source =
   let rec read seen ~from path =
@@ -73,9 +88,18 @@ let requirements source =
         if Filename.is_relative path then relative from path else path
       in
       let* bytes = source.Source.read path in
-      Support.iter
-        (line (Paths.add canonical seen) path)
-        (String.split_on_char '\n' bytes)
+      let+ lines =
+        Support.traverse
+          (line (Paths.add canonical seen) path)
+          (String.split_on_char '\n' bytes)
+      in
+      let included = List.concat_map (fun line -> line.included) lines in
+      let local = List.exists (fun line -> line.local) lines in
+      (* Only snapshot-listed files can be copied before the source. *)
+      let listed = normalize path in
+      if Filename.is_relative path && Source.has source listed then
+        { included = listed :: included; local }
+      else { included; local = true }
   and line seen from line =
     let value = String.trim (String.take_first_while (( <> ) '#') line) in
     let options =
@@ -104,12 +128,16 @@ let requirements source =
     in
     match found with
     | Some (Include_file, path) -> read seen ~from path
-    | Some (Local_dependency, path) -> reference source ~from path
-    | None -> reference source ~from value
+    | Some (Local_dependency, path) ->
+        let+ _ = reference source ~from path in
+        { included = []; local = true }
+    | None ->
+        let+ local = reference source ~from value in
+        { included = []; local }
   in
   if Source.has source "requirements.txt" then
     read Paths.empty ~from:"requirements.txt" "requirements.txt"
-  else Ok ()
+  else Ok { included = []; local = false }
 
 let project source path document =
   let* dependencies = Toml.strings document [ "project"; "dependencies" ] in
@@ -118,21 +146,25 @@ let project source path document =
       [ "project"; "optional-dependencies" ]
       (Otoml.get_array (Otoml.get_string ~strict:true))
   in
-  let* () =
-    Support.iter
+  let* dependencies =
+    Support.traverse
       (reference ~project_root:true source ~from:path)
       (dependencies @ List.concat_map snd optional)
   in
   let* sources =
     Toml.table document [ "tool"; "uv"; "sources" ] Otoml.get_value
   in
-  let* () =
-    Support.iter
+  let* sources =
+    Support.traverse
       (fun (_, value) ->
         let* local = Toml.string value [ "path" ] in
         match local with
-        | None -> Ok ()
-        | Some local -> reference source ~from:path local)
+        | None ->
+            let+ workspace = Toml.field value [ "workspace" ] Otoml.get_value in
+            Option.is_some workspace
+        | Some local ->
+            let+ _ = reference source ~from:path local in
+            true)
       sources
   in
   let* pdm = Toml.field document [ "tool"; "pdm" ] Otoml.get_value in
@@ -151,12 +183,12 @@ let project source path document =
     in
     Option.fold ~none:[] ~some:(collect "") pdm
   in
-  let* () =
-    Support.iter
+  let* urls =
+    Support.traverse
       (fun url ->
         if String.starts_with ~prefix:"file:" url || String.contains url '$'
         then reference ~project_root:true source ~from:path url
-        else Ok ())
+        else Ok false)
       pdm_source_urls
   in
   let* members =
@@ -167,4 +199,6 @@ let project source path document =
   in
   let* () = Source.workspace (members @ excluded) in
   let* backend = Toml.strings document [ "build-system"; "backend-path" ] in
-  Support.iter (Source.check_reference source ~from:path) backend
+  let+ () = Support.iter (Source.check_reference source ~from:path) backend in
+  List.exists Fun.id (dependencies @ sources @ urls)
+  || members <> [] || backend <> []

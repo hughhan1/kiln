@@ -28,6 +28,37 @@ let selected response =
   Yojson.Basic.Util.(
     response.Planner.resolution |> member "data" |> member "python")
 
+(* Builder steps as text: context copies and RUN argv. *)
+let step = function
+  | Build_plan.Copy { input = Build_plan.Context; paths = [ "." ]; _ } ->
+      Some "source"
+  | Build_plan.Copy { input = Build_plan.Context; paths; _ } ->
+      Some ("manifest " ^ String.concat " " paths)
+  | Build_plan.Run argv -> Some (String.concat " " (Build_plan.arguments argv))
+  | Build_plan.Copy { input = Build_plan.Output _ | Build_plan.External _; _ }
+  | Build_plan.Workdir _ | Build_plan.Env _ | Build_plan.User _
+  | Build_plan.Entrypoint _ | Build_plan.Start _ | Build_plan.Prepend_path _
+  | Build_plan.Write _ ->
+      None
+
+let steps prepared =
+  List.find (List.mem "source")
+    (List.map
+       (fun stage -> List.filter_map step (Build_plan.operations stage))
+       (Build_plan.stages prepared.Planner.plan))
+
+(* Whether the first step starting with each prefix occurs in list order. *)
+let ordered steps prefixes =
+  let indices =
+    List.map
+      (fun prefix ->
+        match List.find_index (String.starts_with ~prefix) steps with
+        | Some index -> index
+        | None -> failwith ("missing step: " ^ prefix))
+      prefixes
+  in
+  indices = List.sort_uniq Int.compare indices
+
 let () =
   List.iter
     (fun (constraint_, versions, expected) ->
@@ -199,6 +230,156 @@ let () =
           ("python", "3.12.11", "RAILPACK_PYTHON_VERSION");
           ("uv", "0.8.0", "RAILPACK_UV_VERSION");
         ]);
+  snapshot
+    [
+      ("requirements.txt", "idna==3.10\n-r requirements/base.txt\n");
+      ("main.py", "");
+    ]
+    "remote requirements install before the source copy"
+    (fun root ->
+      Unix.mkdir (Filename.concat root "requirements") 0o700;
+      write root "requirements/base.txt" "--hash=sha256:abc\nflask>=3\n";
+      let prepared = ok (prepare root []) in
+      let steps = steps prepared in
+      check "manifests, environment, install, then source"
+        (ordered steps
+           [
+             "manifest requirements.txt";
+             "manifest requirements/base.txt";
+             "python -m venv";
+             "python -m pip install --no-cache-dir -r requirements.txt";
+             "source";
+           ]);
+      let dockerfile = Planner.dockerfile prepared in
+      check "manifests keep their own paths"
+        (contains dockerfile {|COPY ["requirements.txt","/app/./"]|}
+        && contains dockerfile
+             {|COPY ["requirements/base.txt","/app/requirements/"]|}));
+  List.iter
+    (fun (label, files, fields) ->
+      snapshot files label (fun root ->
+          Unix.mkdir (Filename.concat root "packages") 0o700;
+          Unix.mkdir (Filename.concat root "packages/local") 0o700;
+          write
+            (Filename.concat root "packages/local")
+            "pyproject.toml" "[project]\nname='local'\nversion='1.0.0'\n";
+          let steps = steps (ok (prepare root fields)) in
+          check "installation sees the whole source"
+            ((not (List.exists (String.starts_with ~prefix:"manifest") steps))
+            && ordered steps [ "source"; "python -m venv" ])))
+    [
+      ( "local requirement keeps the whole source",
+        [ ("requirements.txt", "./packages/local\n"); ("main.py", "") ],
+        [] );
+      ( "project install keeps the whole source",
+        [
+          ("requirements.txt", "idna==3.10\n");
+          ( "pyproject.toml",
+            "[project]\n\
+             name='app'\n\
+             version='1.0.0'\n\
+             [build-system]\n\
+             requires=['setuptools']\n\
+             build-backend='setuptools.build_meta'\n" );
+        ],
+        [] );
+      ( "custom install keeps the whole source",
+        [ ("requirements.txt", "idna==3.10\n"); ("main.py", "") ],
+        [
+          ( "environment",
+            `Assoc [ ("RAILPACK_INSTALL_CMD", `String "pip install idna") ] );
+        ] );
+      ( "uv workspace keeps the whole source",
+        [
+          ( "pyproject.toml",
+            "[project]\n\
+             name='app'\n\
+             version='1.0.0'\n\
+             requires-python='>=3.11'\n\
+             [tool.uv.workspace]\n\
+             members=['packages/local']\n" );
+          ( "uv.lock",
+            "version=1\n\
+             [[package]]\n\
+             name='local'\n\
+             source={editable='packages/local'}\n" );
+        ],
+        [] );
+      ( "uv dynamic metadata keeps the whole source",
+        [
+          ( "pyproject.toml",
+            "[project]\n\
+             name='app'\n\
+             dynamic=['version']\n\
+             requires-python='>=3.11'\n" );
+          ("uv.lock", "version=1\n");
+        ],
+        [] );
+    ];
+  List.iter
+    (fun (label, build_system, finish) ->
+      snapshot
+        [
+          ( "pyproject.toml",
+            "[project]\n\
+             name='app'\n\
+             version='1.0.0'\n\
+             requires-python='>=3.11'\n\
+             dependencies=['idna==3.10']\n" ^ build_system );
+          ( "uv.lock",
+            "version=1\n\
+             requires-python='>=3.11'\n\
+             [[package]]\n\
+             name='app'\n\
+             source={editable='.'}\n" );
+          (".python-version", "3.13");
+          ("main.py", "");
+        ]
+        label
+        (fun root ->
+          let steps = steps (ok (prepare root [])) in
+          let sync = "uv sync --locked --no-dev" in
+          check "uv installs dependencies from manifests"
+            (ordered steps
+               [
+                 "manifest .python-version pyproject.toml uv.lock";
+                 sync ^ " --no-install-project";
+                 "source";
+               ]);
+          check "the project installs after the source copy"
+            (List.exists
+               (String.starts_with ~prefix:(sync ^ " --no-editable"))
+               steps
+            = finish);
+          if finish then
+            check "project sync follows the source copy"
+              (ordered steps [ "source"; sync ^ " --no-editable" ])))
+    [
+      ( "uv packaged project installs dependencies first",
+        "[build-system]\n\
+         requires=['setuptools']\n\
+         build-backend='setuptools.build_meta'\n",
+        true );
+      ("uv virtual project installs dependencies only", "", false);
+    ];
+  snapshot
+    [
+      ( "pyproject.toml",
+        "[project]\n\
+         name='app'\n\
+         version='1.0.0'\n\
+         dependencies=['idna==3.10']\n\
+         [tool.poetry]\n\
+         package-mode=false\n" );
+      ("poetry.lock", "");
+      ("main.py", "");
+    ]
+    "Poetry application installs dependencies first"
+    (fun root ->
+      check "manager installs from manifests"
+        (ordered
+           (steps (ok (prepare root [])))
+           [ "manifest poetry.lock pyproject.toml"; "poetry install"; "source" ]));
   snapshot
     [
       ( "pyproject.toml",
