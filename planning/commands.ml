@@ -15,6 +15,8 @@ let paths commands =
           None)
     commands
 
+let inherits commands = List.mem Inherit commands
+
 let expand commands inherited =
   List.concat_map
     (function Inherit -> inherited | Operation command -> [ command ])

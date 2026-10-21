@@ -31,6 +31,7 @@ type application = {
   platforms : Platforms.t;
   requirements : Semver_image.requirements;
   install : Build_plan.argv;
+  install_commands : Build_plan.operation list -> Build_plan.operation list;
   build : Build_plan.operation list;
   start : Build_plan.argv option;
 }
@@ -79,6 +80,7 @@ let load request source =
     platforms = request.Request.platforms;
     requirements;
     install;
+    install_commands = Request.install_commands request;
     build =
       Request.build_command request
         (if Javascript.has_script root "build" then Some build_argv else None);
@@ -109,8 +111,8 @@ let plan app resolved =
          Workdir "/app";
          Env install_env;
          Source.copy ~exclude [ "." ] "/app/";
-         Run app.install;
        ]
+      @ app.install_commands [ Run app.install ]
       @ app.build)
   in
   stage (Image image)

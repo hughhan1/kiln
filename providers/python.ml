@@ -65,6 +65,7 @@ type application = {
   installable : bool;
   start : Build_plan.argv option;
   build : Build_plan.operation list;
+  install_commands : Build_plan.operation list -> Build_plan.operation list;
   install_override : Build_plan.argv option;
 }
 
@@ -433,7 +434,7 @@ let load request source =
   (* uv builds the root project to read dynamic metadata. *)
   let* dynamic = Toml.field root [ "project"; "dynamic" ] Otoml.get_value in
   let inputs =
-    if Option.is_some request.Request.install then Whole_source
+    if Request.replaces_install request then Whole_source
     else
       install_inputs source install ~requirements:pip_requirements
         ~project:root_local
@@ -498,6 +499,7 @@ let load request source =
       installable;
       start;
       install_override = request.Request.install;
+      install_commands = Request.install_commands request;
       build = Request.build_command request None;
     }
 
@@ -745,15 +747,17 @@ let plan app resolved =
       @ manager_environment)
   in
   let copy_source = Source.copy ~exclude [ "." ] "/app/" in
+  (* The venv precedes the replaceable install block: the runtime stage copies it. *)
   let* builder =
     stage (Image resolved.builder)
       ([ Workdir "/app"; Env env; venv ]
       @
       match app.inputs with
-      | Whole_source -> (copy_source :: setup) @ commands @ app.build
+      | Whole_source ->
+          (copy_source :: app.install_commands (setup @ commands)) @ app.build
       | Manifests paths ->
-          Source.manifests paths @ setup @ commands @ (copy_source :: finish)
-          @ app.build)
+          app.install_commands (Source.manifests paths @ setup @ commands)
+          @ (copy_source :: finish) @ app.build)
   in
   stage (Image resolved.runtime)
     [

@@ -379,6 +379,54 @@ let () =
         (ordered
            (steps (ok (prepare root [])))
            [ "manifest poetry.lock pyproject.toml"; "poetry install"; "source" ]));
+  List.iter
+    (fun (commands, expected, manifests) ->
+      snapshot
+        [ ("requirements.txt", "idna==3.10\n"); ("main.py", "") ]
+        ("install commands " ^ commands)
+        (fun root ->
+          write root "railpack.json"
+            ({|{"steps":{"install":{"commands":|} ^ commands ^ "}}}");
+          let steps =
+            steps
+              (ok
+                 (prepare root
+                    [
+                      ( "environment",
+                        `Assoc
+                          [ ("RAILPACK_INSTALL_CMD", `String "echo ignored") ]
+                      );
+                    ]))
+          in
+          check "configured commands take their place" (ordered steps expected);
+          check "configuration replaces the install command"
+            (not (List.mem "/bin/sh -c echo ignored" steps));
+          check "inheritance selects the dependency layout"
+            (List.exists (String.starts_with ~prefix:"manifest") steps
+            = manifests)))
+    [
+      ( {|["python -c 'print(1)'", "..."]|},
+        [
+          "python -m venv";
+          "/bin/sh -c python -c 'print(1)'";
+          "manifest requirements.txt";
+          "python -m pip install";
+          "source";
+        ],
+        true );
+      ( {|["...", "python -c 'print(1)'"]|},
+        [
+          "manifest requirements.txt";
+          "python -m pip install";
+          "/bin/sh -c python -c 'print(1)'";
+          "source";
+        ],
+        true );
+      ( {|["python -c 'print(1)'"]|},
+        (* The runtime copies /opt/venv, so replacing installation keeps it. *)
+        [ "python -m venv"; "source"; "/bin/sh -c python -c 'print(1)'" ],
+        false );
+    ];
   snapshot
     [
       ( "pyproject.toml",

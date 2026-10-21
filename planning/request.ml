@@ -7,6 +7,7 @@ type t = {
   environment : Environment.t;
   secrets : Environment.Names.t;
   install : Build_plan.argv option;
+  install_steps : Commands.t option;
   platforms : Platforms.t;
   start : startup option;
   error_missing_start : bool;
@@ -102,6 +103,7 @@ let decode fields =
     environment;
     secrets = Environment.names environment;
     install;
+    install_steps = None;
     platforms;
     start;
     error_missing_start;
@@ -120,6 +122,17 @@ let build_command request default =
   Option.fold ~none:inherited
     ~some:(fun commands -> Commands.expand commands inherited)
     request.build
+
+let install_commands request block =
+  Option.fold ~none:block
+    ~some:(fun commands -> Commands.expand commands block)
+    request.install_steps
+
+let replaces_install request =
+  Option.is_some request.install
+  || Option.fold ~none:false
+       ~some:(fun commands -> not (Commands.inherits commands))
+       request.install_steps
 
 let install_command request default =
   match request.install with
@@ -162,7 +175,15 @@ let configure_fields request fields =
   in
   let* variables = Json.field "variables" environment deploy in
   let* steps =
-    Json.field "steps" (Json.default [] (object_fields [ "build" ])) fields
+    Json.field "steps"
+      (Json.default [] (object_fields [ "install"; "build" ]))
+      fields
+  in
+  let* install =
+    Json.field "install" (Json.default [] (object_fields [ "commands" ])) steps
+  in
+  let* install_steps =
+    Json.field "commands" (Json.optional (Commands.decode ~assets:[])) install
   in
   let* build =
     Json.field "build"
@@ -183,6 +204,9 @@ let configure_fields request fields =
     variables;
     secrets = Environment.Names.union request.secrets secrets;
     build = prefer build request.build;
+    install =
+      (match install_steps with Some _ -> None | None -> request.install);
+    install_steps = prefer install_steps request.install_steps;
   }
 
 let configure request source =

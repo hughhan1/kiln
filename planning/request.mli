@@ -1,5 +1,6 @@
 (** Validated preparation inputs. Native argv overrides configured shell
-    startup; configuration overrides request shell and build commands. *)
+    startup; configuration overrides request shell, install, and build commands.
+*)
 
 type startup
 
@@ -8,6 +9,17 @@ type t = private {
   environment : Environment.t;
   secrets : Environment.Names.t;
   install : Build_plan.argv option;
+      (** [INSTALL_CMD], replacing the provider's install command; cleared by
+          configured install commands. *)
+  install_steps : Commands.t option;
+      (** Configured [steps.install.commands], replacing the provider's install
+          block: its dependency manifest copies and installation. Environment
+          setup the runtime depends on, such as Python's [/opt/venv], stays
+          outside the block. The marker ["..."] stands for that block, so
+          commands before it are cached on the base image alone and commands
+          after it on the dependency set. Without the marker the provider copies
+          the whole source first. The full source copy and build commands follow
+          either way. *)
   platforms : Platforms.t;
   start : startup option;
   error_missing_start : bool;
@@ -37,6 +49,15 @@ val defaults :
   t -> string -> Package.requirement list -> Package.requirement list
 (** Environment version overrides replace declarations; previous versions are
     used only when neither was supplied. *)
+
+val install_commands :
+  t -> Build_plan.operation list -> Build_plan.operation list
+(** Expand configured install commands and inheritance against a provider's
+    install block. *)
+
+val replaces_install : t -> bool
+(** Whether a custom install command or install commands without inheritance
+    replace the provider's installation, so it must see the whole source. *)
 
 val install_command :
   t -> string list -> (Build_plan.argv, Kiln_core.Error.t) result
