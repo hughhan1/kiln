@@ -241,20 +241,20 @@ let () =
       write root "requirements/base.txt" "--hash=sha256:abc\nflask>=3\n";
       let prepared = ok (prepare root []) in
       let steps = steps prepared in
-      check "manifests, environment, install, then source"
+      check "environment, manifests, install, then source"
         (ordered steps
            [
+             "python -m venv";
              "manifest requirements.txt";
              "manifest requirements/base.txt";
-             "python -m venv";
              "python -m pip install --no-cache-dir -r requirements.txt";
              "source";
            ]);
       let dockerfile = Planner.dockerfile prepared in
       check "manifests keep their own paths"
-        (contains dockerfile {|COPY ["requirements.txt","/app/./"]|}
+        (contains dockerfile {|COPY ["requirements.txt","./"]|}
         && contains dockerfile
-             {|COPY ["requirements/base.txt","/app/requirements/"]|}));
+             {|COPY ["requirements/base.txt","requirements/"]|}));
   List.iter
     (fun (label, files, fields) ->
       snapshot files label (fun root ->
@@ -265,8 +265,7 @@ let () =
             "pyproject.toml" "[project]\nname='local'\nversion='1.0.0'\n";
           let steps = steps (ok (prepare root fields)) in
           check "installation sees the whole source"
-            ((not (List.exists (String.starts_with ~prefix:"manifest") steps))
-            && ordered steps [ "source"; "python -m venv" ])))
+            (not (List.exists (String.starts_with ~prefix:"manifest") steps))))
     [
       ( "local requirement keeps the whole source",
         [ ("requirements.txt", "./packages/local\n"); ("main.py", "") ],

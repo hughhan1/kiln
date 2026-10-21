@@ -67,17 +67,6 @@ module Paths = Set.Make (String)
 
 type requirements = { included : string list; local : bool }
 
-let normalize path =
-  List.fold_left
-    (fun parts part ->
-      match (part, parts) with
-      | ("" | "."), _ -> parts
-      | "..", _ :: rest -> rest
-      | _ -> part :: parts)
-    []
-    (String.split_on_char '/' path)
-  |> List.rev |> String.concat "/"
-
 let requirements source =
   let rec read seen ~from path =
     let* canonical = source.Source.resolve_reference ~from path in
@@ -95,10 +84,9 @@ let requirements source =
       in
       let included = List.concat_map (fun line -> line.included) lines in
       let local = List.exists (fun line -> line.local) lines in
-      (* Only snapshot-listed files can be copied before the source. *)
-      let listed = normalize path in
-      if Filename.is_relative path && Source.has source listed then
-        { included = listed :: included; local }
+      (* Only files named as the snapshot lists them can be copied before the source. *)
+      if Filename.is_relative path && Source.has source path then
+        { included = path :: included; local }
       else { included; local = true }
   and line seen from line =
     let value = String.trim (String.take_first_while (( <> ) '#') line) in

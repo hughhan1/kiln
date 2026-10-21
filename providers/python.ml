@@ -617,7 +617,7 @@ let legacy _ _ = Error Error.Invalid_resolution
 
 let manager_setup app resolved name version checks install =
   match app.install_override with
-  | Some _ -> Ok ([], [], [], [])
+  | Some _ -> Ok ([], [], [])
   | None ->
       let open Build_plan in
       let* venv = run [ "python"; "-m"; "venv"; "/opt/kiln-tools" ] in
@@ -651,14 +651,16 @@ let manager_setup app resolved name version checks install =
       Ok
         ( [ copy tools [ "/opt/kiln-tools/" ] "/opt/kiln-tools/" ],
           defaults,
-          [],
           env_values )
 
-module Directories = Map.Make (String)
+let uv_sync options =
+  [ "uv"; "sync"; "--locked"; "--no-dev" ]
+  @ options
+  @ [ "--python"; "/usr/local/bin/python"; "--no-managed-python" ]
 
 let plan app resolved =
   let open Build_plan in
-  let* setup, defaults, finish, manager_environment =
+  let* setup, defaults, manager_environment =
     match (app.install, resolved.installer) with
     | Pip_install install, Pip ->
         let pip args =
@@ -669,7 +671,7 @@ let plan app resolved =
            else [])
           @ if install.project then [ pip [ "." ] ] else []
         in
-        Ok ([], defaults, [], [])
+        Ok ([], defaults, [])
     | Uv_install _, Uv uv ->
         let* uv_stage = stage (Image uv.image) [] in
         let* env =
@@ -680,22 +682,14 @@ let plan app resolved =
               ("UV_LINK_MODE", "copy");
             ]
         in
-        let sync options =
-          [ "uv"; "sync"; "--locked"; "--no-dev" ]
-          @ options
-          @ [ "--python"; "/usr/local/bin/python"; "--no-managed-python" ]
-        in
-        let defaults, finish =
+        let defaults =
           match app.inputs with
-          | Whole_source -> ([ sync [ "--no-editable" ] ], [])
-          | Manifests _ ->
-              ( [ sync [ "--no-install-project" ] ],
-                if app.installable then [ sync [ "--no-editable" ] ] else [] )
+          | Whole_source -> [ uv_sync [ "--no-editable" ] ]
+          | Manifests _ -> [ uv_sync [ "--no-install-project" ] ]
         in
         Ok
           ( [ copy uv_stage [ "/uv" ] "/usr/local/bin/uv"; Env env ],
             defaults,
-            finish,
             [] )
     | Manager_install { manager = Poetry; lock; install_root }, Poetry_tool tool
       ->
@@ -722,7 +716,16 @@ let plan app resolved =
     | Some argv -> Ok [ Run argv ]
     | None -> Support.traverse run defaults
   in
-  let* finish = Support.traverse run finish in
+  (* Dependencies installed from manifests leave the project itself for after the source copy. *)
+  let* finish =
+    match (app.install, app.inputs) with
+    | Uv_install _, Manifests _ when app.installable ->
+        let+ sync = run (uv_sync [ "--no-editable" ]) in
+        [ sync ]
+    | ( (Pip_install _ | Uv_install _ | Manager_install _),
+        (Whole_source | Manifests _) ) ->
+        Ok []
+  in
   let manager_path =
     match app.install with
     | Manager_install _ when Option.is_none app.install_override ->
@@ -742,26 +745,15 @@ let plan app resolved =
       @ manager_environment)
   in
   let copy_source = Source.copy ~exclude [ "." ] "/app/" in
-  let prefix, copies, source =
-    match app.inputs with
-    | Whole_source -> ([ copy_source ], [], [])
-    | Manifests paths ->
-        let directories =
-          List.fold_left
-            (fun groups path ->
-              Directories.add_to_list (Filename.dirname path) path groups)
-            Directories.empty paths
-        in
-        ( [],
-          List.map
-            (fun (dir, paths) -> context (List.rev paths) ("/app/" ^ dir ^ "/"))
-            (Directories.bindings directories),
-          copy_source :: finish )
-  in
   let* builder =
     stage (Image resolved.builder)
-      ([ Workdir "/app"; Env env ]
-      @ prefix @ copies @ [ venv ] @ setup @ commands @ source @ app.build)
+      ([ Workdir "/app"; Env env; venv ]
+      @
+      match app.inputs with
+      | Whole_source -> (copy_source :: setup) @ commands @ app.build
+      | Manifests paths ->
+          Source.manifests paths @ setup @ commands @ (copy_source :: finish)
+          @ app.build)
   in
   stage (Image resolved.runtime)
     [
