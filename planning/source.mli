@@ -31,3 +31,8 @@ val workspace : string list -> (unit, Kiln_core.Error.t) result
 val copy : exclude:string list -> string list -> string -> Build_plan.operation
 (** Copy snapshot paths while excluding .git and provider exclusions at every
     depth. *)
+
+val manifests : string list -> Build_plan.operation list
+(** Copy listed snapshot files to their own paths under the working directory,
+    one COPY per directory, so dependency installation can precede the full
+    source copy. *)

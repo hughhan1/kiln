@@ -512,8 +512,6 @@ let resolve ~today ~fetch app =
       runtime;
     }
 
-module Directories = Map.Make (String)
-
 let id = "node"
 let public_name = id
 let exclude = [ "node_modules" ]
@@ -551,17 +549,7 @@ let plan app r =
   let copies, source =
     match app.inputs with
     | Whole_source -> ([ copy_source ], [])
-    | Manifests paths ->
-        let directories =
-          List.fold_left
-            (fun groups path ->
-              Directories.add_to_list (Filename.dirname path) path groups)
-            Directories.empty paths
-        in
-        ( List.map
-            (fun (dir, paths) -> context (List.rev paths) (dir ^ "/"))
-            (Directories.bindings directories),
-          [ copy_source ] )
+    | Manifests paths -> (Source.manifests paths, [ copy_source ])
   in
   let install = Run app.install in
   let* build =

@@ -20,6 +20,19 @@ let copy ~exclude paths destination =
       (List.concat_map (fun name -> [ name; "**/" ^ name ]) (".git" :: exclude))
     paths destination
 
+let manifests paths =
+  let module Directories = Map.Make (String) in
+  let directories =
+    List.fold_left
+      (fun groups path ->
+        Directories.add_to_list (Filename.dirname path) path groups)
+      Directories.empty paths
+  in
+  List.map
+    (fun (directory, paths) ->
+      Build_plan.context (List.rev paths) (directory ^ "/"))
+    (Directories.bindings directories)
+
 let version source path =
   if not (has source path) then Ok None
   else
