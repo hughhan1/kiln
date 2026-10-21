@@ -154,6 +154,7 @@ type application = {
   integrity : Javascript.integrity option;
   manager : manager;
   install : Build_plan.argv;
+  install_commands : Build_plan.operation list -> Build_plan.operation list;
   inputs : inputs;
   build : Build_plan.operation list;
   command : Build_plan.argv option;
@@ -251,7 +252,7 @@ let interpret (request : Request.t) (snapshot : snapshot) =
       ~main:[ "node" ]
   in
   let inputs =
-    if Option.is_some request.Request.install then Whole_source
+    if Request.replaces_install request then Whole_source
     else install_inputs snapshot
   in
   let fingerprint =
@@ -292,6 +293,7 @@ let interpret (request : Request.t) (snapshot : snapshot) =
     integrity = pkg.Javascript.declared_integrity;
     manager = pm;
     install;
+    install_commands = Request.install_commands request;
     inputs;
     build =
       Request.build_command request
@@ -546,14 +548,15 @@ let plan app r =
       )
   in
   let copy_source = Source.copy ~exclude [ "." ] "." in
-  let copies, source =
-    match app.inputs with
-    | Whole_source -> ([ copy_source ], [])
-    | Manifests paths -> (Source.manifests paths, [ copy_source ])
-  in
   let install = Run app.install in
   let* build =
-    stage (Stage toolchain) (copies @ [ install ] @ source @ app.build)
+    stage (Stage toolchain)
+      ((match app.inputs with
+         | Whole_source -> copy_source :: app.install_commands [ install ]
+         | Manifests paths ->
+             app.install_commands (Source.manifests paths @ [ install ])
+             @ [ copy_source ])
+      @ app.build)
   in
   stage (Image r.runtime)
     ([ Workdir "/app"; Env runtime_env ]

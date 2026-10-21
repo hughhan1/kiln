@@ -23,6 +23,7 @@ type application = {
   requirements : Semver_image.requirements;
   minimum : Semver.version;
   install : Build_plan.argv;
+  install_commands : Build_plan.operation list -> Build_plan.operation list;
   build : Build_plan.operation list;
   start : Build_plan.argv option;
 }
@@ -110,6 +111,7 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
       requirements;
       minimum;
       install;
+      install_commands = Request.install_commands request;
       build = Request.build_command request (Some build);
       start;
     }
@@ -169,12 +171,8 @@ let plan app resolved =
   let* builder =
     stage
       (Image (Semver_image.image resolved.compiler))
-      ([
-         Workdir "/app";
-         Env env;
-         Source.copy ~exclude [ "." ] "/app/";
-         Run app.install;
-       ]
+      ([ Workdir "/app"; Env env; Source.copy ~exclude [ "." ] "/app/" ]
+      @ app.install_commands [ Run app.install ]
       @ app.build)
   in
   stage (Image resolved.runtime)

@@ -57,7 +57,9 @@ let prepare { Provider.provider = (module P); detected } ~today ~fetch
       (Option.to_list request.Request.variables)
     @ List.map
         (fun path -> Build_plan.Prepend_path path)
-        (Option.fold ~none:[] ~some:Commands.paths request.Request.build)
+        (List.concat_map
+           (Option.fold ~none:[] ~some:Commands.paths)
+           [ request.Request.install_steps; request.Request.build ])
   in
   let+ plan =
     Build_plan.stage (Build_plan.base plan)

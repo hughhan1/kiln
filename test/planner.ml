@@ -301,6 +301,21 @@ let () =
           ({|"commands":[{"cmd":"..."}]|}, `Inherit);
           ({|"commands":[{"cmd":"sh -c '...'"}]|}, `Inherit);
         ]);
+  snapshot files "install configuration is accepted" (fun root ->
+      List.iter
+        (fun config ->
+          write root "railpack.json" config;
+          check config (Result.is_ok (prepare root [])))
+        [
+          {|{"steps":{"install":{}}}|};
+          {|{"steps":{"install":{"commands":[]}}}|};
+          {|{"steps":{"install":{"commands":["echo before","..."]}}}|};
+        ];
+      let recipe = Planner.dockerfile (ok (prepare root [])) in
+      let position line = Option.get (String.find_first ~sub:line recipe) in
+      check "inherited install follows earlier commands"
+        (position {|RUN ["/bin/sh","-c","echo before"]|}
+        < position {|RUN ["npm","install"]|}));
   snapshot files "invalid configuration fails before discovery" (fun root ->
       let reject config =
         write root "railpack.json" config;
@@ -314,8 +329,9 @@ let () =
       List.iter reject
         [
           {|{"deploy":{"aptPackages":["curl"]}}|};
-          {|{"steps":{"install":{}}}|};
           {|{"steps":{"build":{"inputs":[]}}}|};
+          {|{"steps":{"install":{"assets":{}}}}|};
+          {|{"steps":{"install":{"commands":["FILE:artifact missing"]}}}|};
           {|{"steps":{"build":{"commands":[{"cmd":"'unclosed"}]}}}|};
           {|{"steps":{"build":{"commands":[{"cmd":"echo ignored","path":"/tools"}]}}}|};
           {|{"steps":{"build":{"commands":[{"cmd":"echo ok","unknown":true}]}}}|};
