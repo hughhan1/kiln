@@ -1,0 +1,18 @@
+[project]
+name = "kiln-pdm-locked"
+version = "1.0.0"
+requires-python = ">=3.11,<3.14"
+dependencies = ["idna==3.10"]
+
+[project.scripts]
+kiln-smoke = "kiln_app:main"
+
+[dependency-groups]
+dev = ["pytest==8.3.5"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pdm]
+distribution = true

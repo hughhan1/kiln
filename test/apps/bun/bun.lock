@@ -1,0 +1,19 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "kiln-bun-smoke",
+      "dependencies": {
+        "kiln-local": "workspace:*",
+      },
+    },
+    "packages/local": {
+      "name": "kiln-local",
+      "version": "1.0.0",
+    },
+  },
+  "packages": {
+    "kiln-local": ["kiln-local@workspace:packages/local"],
+  }
+}

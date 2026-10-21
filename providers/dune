@@ -1,0 +1,10 @@
+(library
+ (name kiln_providers)
+ (libraries kiln_core kiln_planning yojson digestif yaml angstrom otoml))
+
+(rule
+ (target node_toolchains.ml)
+ (action
+  (write-file
+   %{target}
+   "let json = {|%{read:../packaging/toolchains/node.json}|}")))

@@ -1,0 +1,1 @@
+{"name":"kiln-bun-smoke","packageManager":"bun@1.3.13","workspaces":["packages/*"],"scripts":{"build":"bun build main.ts --target=bun --external=kiln-local --outdir=dist","start":"bun dist/main.js"},"dependencies":{"kiln-local":"workspace:*"}}

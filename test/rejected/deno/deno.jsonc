@@ -1,0 +1,9 @@
+{
+  // All imports are cached during the build.
+  "workspace": ["./packages/local",],
+  "imports": {"is-number": "npm:is-number@6.0.0",},
+  "tasks": {
+    "build": "deno check main.ts",
+    "start": "deno run main.ts",
+  },
+}

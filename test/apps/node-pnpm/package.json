@@ -1,0 +1,1 @@
+{"main":"main.js","dependencies":{"local":"file:packages/local"},"packageManager":"pnpm@12.12.1","engines":{"node":"24.21.0"},"scripts":{"build":"c++ -std=c++17 -shared -fPIC -I/usr/local/include/node native.cc -o native.node"}}

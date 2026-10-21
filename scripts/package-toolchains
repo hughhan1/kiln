@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+registry=${1:?usage: scripts/package-toolchains REGISTRY_REPOSITORY}
+catalog=packaging/toolchains/node.json
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+cp "$catalog" "$stage/catalog.json"
+for index in $(jq -r 'keys[]' "$catalog"); do
+  entry=$(jq -c ".[${index}]" "$catalog")
+  node=$(jq -r .node <<<"$entry")
+  manager=$(jq -r .manager <<<"$entry")
+  version=$(jq -r .version <<<"$entry")
+  image=$(jq -r .base <<<"$entry")
+  for target in runtime builder; do
+    tag="node-${node}-${manager}-${version}-${target}"
+    docker buildx build --platform linux/amd64,linux/arm64 --file packaging/toolchains/Dockerfile \
+      --target "$target" --build-arg "NODE_IMAGE=$image" --build-arg "NODE_VERSION=$node" --build-arg SOURCE_DATE_EPOCH=0 \
+      --build-arg "PACKAGE_MANAGER=$manager" --build-arg "PACKAGE_MANAGER_VERSION=$version" \
+      --metadata-file "$stage/metadata.json" --tag "$registry:$tag" \
+      --provenance=false --sbom=false --push packaging/toolchains
+    digest=$(jq -er '.["containerimage.digest"]' "$stage/metadata.json")
+    jq --arg image "$registry@$digest" ".[$index].$target = \$image" \
+      "$stage/catalog.json" > "$stage/next.json"
+    mv "$stage/next.json" "$stage/catalog.json"
+  done
+done
+cp "$stage/catalog.json" "$catalog"

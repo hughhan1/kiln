@@ -1,0 +1,63 @@
+(executable
+ (name entry)
+ (modes
+  (native object))
+ (libraries kiln_io threads)
+ (foreign_stubs
+  (language c)
+  (names kiln)
+  (flags
+   (:standard -std=c11 -Wall -Wextra -Werror)))
+ (link_flags
+  (:standard
+   -linkall
+   (:include sdk_flags.sexp))))
+
+(rule
+ (enabled_if
+  (= %{system} macosx))
+ (target sdk_path)
+ (action
+  (with-stdout-to
+   %{target}
+   (run xcrun --show-sdk-path))))
+
+(rule
+ (enabled_if
+  (= %{system} macosx))
+ (targets sdk_flags.sexp system_libs)
+ (action
+  (progn
+   (with-stdout-to
+    sdk_flags.sexp
+    (echo "(-cclib -syslibroot -cclib \"%{read-lines:sdk_path}\")"))
+   (with-stdout-to
+    system_libs
+    (echo "-lcurl")))))
+
+(rule
+ (enabled_if
+  (<> %{system} macosx))
+ (targets sdk_flags.sexp system_libs)
+ (action
+  (progn
+   (with-stdout-to
+    sdk_flags.sexp
+    (echo "(-cclib -L/usr/lib)"))
+   (with-stdout-to
+    system_libs
+    (echo "-lm -ldl")))))
+
+(rule
+ (target libkiln.a)
+ (deps entry.exe.o)
+ (action
+  (run ar rcs %{target} %{deps})))
+
+(rule
+ (target kiln.pc)
+ (action
+  (with-stdout-to
+   %{target}
+   (echo
+    "prefix=${pcfiledir}/../..\nName: kiln\nDescription: OCaml application recipe planner\nVersion: %{version:kiln_ocaml}\nCflags: -I${prefix}/include\nLibs: -L${prefix}/lib -lkiln -lpthread %{read:system_libs}\n"))))

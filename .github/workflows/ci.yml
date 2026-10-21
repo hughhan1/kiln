@@ -1,0 +1,110 @@
+name: CI
+on:
+  push:
+    branches: [main]
+    tags: [v*]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  MACOSX_DEPLOYMENT_TARGET: "15.0"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      full: ${{ github.event_name != 'pull_request' || steps.changes.outputs.native == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: changes
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            native:
+              - '.github/**'
+              - 'packaging/**'
+              - 'install.sh'
+              - 'scripts/**'
+              - 'ffi/**'
+              - '*.opam*'
+              - 'dune-project'
+              - '**/dune'
+              - '**/*darwin*'
+              - '**/*linux*'
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.5.1'
+          opam-repositories: |
+            default: git+https://github.com/ocaml/opam-repository.git#74bf8da7ffea3971801da0d3540eb43f26d60fbd
+      - run: opam install . --deps-only --locked
+      - run: opam install ocamlformat.0.29.0
+      - run: opam exec -- dune build @fmt
+      - run: opam exec -- dune runtest
+      - run: opam exec -- dune build @integration
+  package:
+    needs: integration
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.integration.outputs.full == 'true' && '[{"runner":"ubuntu-24.04","target":"linux_amd64"},{"runner":"ubuntu-24.04-arm","target":"linux_arm64"},{"runner":"macos-15-intel","target":"darwin_amd64"},{"runner":"macos-15","target":"darwin_arm64"}]' || '[{"runner":"ubuntu-24.04","target":"linux_amd64"}]') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ocaml/setup-ocaml@v3
+        if: runner.os == 'macOS'
+        with:
+          ocaml-compiler: '5.5.1'
+          opam-repositories: |
+            default: git+https://github.com/ocaml/opam-repository.git#74bf8da7ffea3971801da0d3540eb43f26d60fbd
+      - name: Build Linux package
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools pkg-config
+          docker buildx build -f packaging/Dockerfile --output type=local,dest=dist .
+      - name: Build macOS package
+        if: runner.os == 'macOS'
+        run: scripts/package "$PWD/dist"
+      - name: Check packaged C SDK
+        run: scripts/check-sdk dist
+      - name: Archive package
+        run: tar -czf kiln-${{ matrix.target }}.tar.gz -C dist bin include lib
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kiln-${{ matrix.target }}
+          path: kiln-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [package, integration]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: kiln-*
+          path: release
+          merge-multiple: true
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$VERSION" = "v$(sed -n 's/^version: "\(.*\)"/\1/p' kiln_ocaml.opam)"
+          cp install.sh release/
+          cd release
+          sha256sum kiln-*.tar.gz > checksums.txt
+          gh release create "$VERSION" --verify-tag --title "Kiln $VERSION" --generate-notes ./*

@@ -1,0 +1,25 @@
+version = 1
+revision = 3
+requires-python = ">=3.11, <3.14"
+
+[manifest]
+members = [
+    "kiln-app",
+    "kiln-local",
+]
+
+[[package]]
+name = "kiln-app"
+version = "1.0.0"
+source = { editable = "." }
+dependencies = [
+    { name = "kiln-local" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "kiln-local", editable = "packages/local" }]
+
+[[package]]
+name = "kiln-local"
+version = "1.0.0"
+source = { editable = "packages/local" }

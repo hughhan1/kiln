@@ -1,0 +1,52 @@
+#!/bin/sh
+set -eu
+[ "$#" -eq 1 ] || { echo 'usage: scripts/package PREFIX' >&2; exit 1; }
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+mkdir -p "$1"
+output=$(CDPATH='' cd -- "$1" && pwd)
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT HUP INT TERM
+case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64|Linux/aarch64) ;;
+  Darwin/x86_64|Darwin/arm64)
+    export MACOSX_DEPLOYMENT_TARGET=15.0
+    CURLCFLAGS="-isysroot $(xcrun --show-sdk-path)"
+    export CURLCFLAGS CURLLIBS=-lcurl
+    compiler_dir=$(opam exec -- ocamlopt -where)
+    otool -l "$compiler_dir/std_exit.o" > "$stage/compiler.txt"
+    if ! awk '$1 == "minos" && $2 + 0 > 15 {bad = 1} END {exit bad}' "$stage/compiler.txt"; then
+      echo 'Rebuild OCaml 5.5.1 with MACOSX_DEPLOYMENT_TARGET=15.0 before packaging.' >&2
+      exit 1
+    fi
+    ;;
+  *) echo 'unsupported host' >&2; exit 1 ;;
+esac
+[ "$(opam exec -- ocamlopt -version)" = 5.5.1 ]
+opam install "$root" --deps-only --locked --yes --assume-depexts
+profile=release
+if [ "${KILN_STATIC_CURL:-0}" = 1 ]; then profile=static; fi
+opam exec -- dune build -j "${OPAMJOBS:-2}" --root "$root" --build-dir "$stage/build" --profile "$profile" bin/main.exe ffi/libkiln.a ffi/kiln.pc
+mkdir -p "$output/bin" "$output/include" "$output/lib/pkgconfig"
+install -m 644 "$stage/build/default/ffi/libkiln.a" "$output/lib/libkiln.a"
+install -m 644 "$stage/build/default/ffi/kiln.pc" "$output/lib/pkgconfig/kiln.pc"
+install -m 644 "$root/ffi/kiln.h" "$output/include/kiln.h"
+install -m 755 "$stage/build/default/bin/main.exe" "$stage/kiln"
+if [ "$(uname -s)" = Darwin ]; then
+  otool -l "$stage/kiln" > "$stage/binary.txt"
+  awk '$1 == "minos" {found = 1; if ($2 != "15.0") bad = 1} END {exit bad || !found}' "$stage/binary.txt"
+  [ "$(lipo -archs "$stage/kiln")" = "$(uname -m)" ]
+  strip -x "$stage/kiln"
+  codesign --force --sign - "$stage/kiln"
+  otool -L "$stage/kiln" | awk 'NR > 1 {if ($1 !~ /^\/usr\/lib\// && $1 !~ /^\/System\/Library\//) exit 1}'
+else
+  if [ "$profile" = static ]; then
+    readelf -l "$stage/kiln" > "$stage/program-headers"
+    readelf -d "$stage/kiln" > "$stage/dynamic-entries"
+    if grep -q INTERP "$stage/program-headers" || grep -q NEEDED "$stage/dynamic-entries"; then
+      echo 'Linux release binary must be statically linked.' >&2
+      exit 1
+    fi
+  fi
+  strip "$stage/kiln"
+fi
+install -m 755 "$stage/kiln" "$output/bin/kiln"

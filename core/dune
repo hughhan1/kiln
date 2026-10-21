@@ -1,0 +1,3 @@
+(library
+ (name kiln_core)
+ (libraries angstrom))

@@ -1,0 +1,11 @@
+[project]
+name = "kiln-poetry-unlocked"
+version = "1.0.0"
+requires-python = ">=3.11,<3.14"
+dependencies = ["idna==3.10"]
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.group.dev.dependencies]
+pytest = "8.3.5"

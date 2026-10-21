@@ -1,0 +1,18 @@
+[project]
+name = "kiln-app"
+version = "1.0.0"
+requires-python = ">=3.11,<3.14"
+dependencies = ["kiln-local", "idna==3.10"]
+[project.scripts]
+kiln-smoke = "kiln_app:main"
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+include = ["kiln_app*"]
+[tool.uv]
+required-version = ">=0.8.0"
+[tool.uv.sources]
+kiln-local = { workspace = true }
+[tool.uv.workspace]
+members = ["packages/local"]

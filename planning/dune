@@ -1,0 +1,17 @@
+(library
+ (name kiln_planning)
+ (libraries kiln_core yojson digestif angstrom))
+
+(rule
+ (target default_platform.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (echo "let name = \"linux/%{architecture}\"\n"))))
+
+(rule
+ (target version.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (echo "let current = \"%{version:kiln_ocaml}\"\n"))))

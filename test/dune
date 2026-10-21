@@ -1,0 +1,104 @@
+(library
+ (name contract_support)
+ (modules contract_support)
+ (libraries kiln_core unix yojson))
+
+(library
+ (name node_fixture)
+ (modules node_fixture)
+ (libraries contract_support kiln_io yojson))
+
+(test
+ (name planner)
+ (modules planner)
+ (libraries
+  contract_support
+  node_fixture
+  kiln_core
+  kiln_planning
+  kiln_providers
+  kiln_io
+  unix
+  yojson)
+ (deps ../bin/main.exe ../kiln_ocaml.opam))
+
+(test
+ (name semver)
+ (modules semver)
+ (libraries contract_support kiln_core yojson)
+ (deps node-semver.json))
+
+(test
+ (name node)
+ (modules node)
+ (libraries
+  contract_support
+  node_fixture
+  kiln_core
+  kiln_planning
+  kiln_providers
+  kiln_io
+  unix
+  yojson))
+
+(test
+ (name installer)
+ (modules installer)
+ (libraries contract_support unix digestif)
+ (deps ../install.sh))
+
+(test
+ (name bun)
+ (modules bun)
+ (libraries contract_support kiln_core kiln_planning kiln_io unix yojson))
+
+(test
+ (name deno)
+ (modules deno)
+ (libraries
+  contract_support
+  kiln_core
+  kiln_planning
+  kiln_providers
+  kiln_io
+  unix
+  yojson))
+
+(test
+ (name python)
+ (modules python)
+ (libraries
+  contract_support
+  kiln_core
+  kiln_planning
+  kiln_providers
+  kiln_io
+  unix
+  yojson))
+
+(executable
+ (name integration)
+ (modules integration)
+ (libraries contract_support unix yojson))
+
+(rule
+ (alias integration)
+ (deps
+  (source_tree apps)
+  (source_tree rejected))
+ (action
+  (chdir
+   %{workspace_root}
+   (run %{exe:integration.exe} %{exe:../bin/main.exe}))))
+
+(test
+ (name go)
+ (modules go)
+ (libraries
+  contract_support
+  kiln_core
+  kiln_planning
+  kiln_providers
+  kiln_io
+  unix
+  yojson))

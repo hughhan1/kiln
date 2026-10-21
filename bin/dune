@@ -1,0 +1,10 @@
+(executable
+ (name main)
+ (public_name kiln)
+ (package kiln_ocaml)
+ (libraries kiln_io kiln_core yojson unix cmdliner))
+
+(env
+ (static
+  (link_flags
+   (:standard -cclib -static))))

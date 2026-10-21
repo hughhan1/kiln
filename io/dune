@@ -1,0 +1,3 @@
+(library
+ (name kiln_io)
+ (libraries kiln_core kiln_planning kiln_providers yojson unix curl))
