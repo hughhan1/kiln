@@ -41,11 +41,34 @@ let step = function
   | Build_plan.Write _ ->
       None
 
+let own_steps stage = List.filter_map step (Build_plan.operations stage)
+
+(* Steps of a stage preceded by those of the stages it is built from. *)
+let rec inherited_steps stage =
+  (match Build_plan.base stage with
+    | Build_plan.Stage parent -> inherited_steps parent
+    | Build_plan.Image _ -> [])
+  @ own_steps stage
+
 let steps prepared =
-  List.find (List.mem "source")
-    (List.map
-       (fun stage -> List.filter_map step (Build_plan.operations stage))
+  inherited_steps
+    (List.find
+       (fun stage -> List.mem "source" (own_steps stage))
        (Build_plan.stages prepared.Planner.plan))
+
+(* Whether the runtime copies the venv from a stage that copies the source. *)
+let venv_follows_source prepared =
+  List.exists
+    (function
+      | Build_plan.Copy { input; paths = [ "/opt/venv/" ]; _ } -> (
+          match input with
+          | Build_plan.Output stage -> List.mem "source" (own_steps stage)
+          | Build_plan.Context | Build_plan.External _ -> false)
+      | Build_plan.Copy _ | Build_plan.Run _ | Build_plan.Workdir _
+      | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint _
+      | Build_plan.Start _ | Build_plan.Prepend_path _ | Build_plan.Write _ ->
+          false)
+    (Build_plan.operations prepared.Planner.plan)
 
 (* Whether the first step starting with each prefix occurs in list order. *)
 let ordered steps prefixes =
@@ -241,6 +264,8 @@ let () =
       write root "requirements/base.txt" "--hash=sha256:abc\nflask>=3\n";
       let prepared = ok (prepare root []) in
       let steps = steps prepared in
+      check "the venv comes from the stage before the source copy"
+        (not (venv_follows_source prepared));
       check "environment, manifests, install, then source"
         (ordered steps
            [
@@ -336,8 +361,11 @@ let () =
         ]
         label
         (fun root ->
-          let steps = steps (ok (prepare root [])) in
+          let prepared = ok (prepare root []) in
+          let steps = steps prepared in
           let sync = "uv sync --locked --no-dev" in
+          check "the venv comes from the stage that installs the project"
+            (venv_follows_source prepared = finish);
           check "uv installs dependencies from manifests"
             (ordered steps
                [

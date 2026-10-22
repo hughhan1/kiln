@@ -747,24 +747,41 @@ let plan app resolved =
       @ manager_environment)
   in
   let copy_source = Source.copy ~exclude [ "." ] "/app/" in
-  (* The venv precedes the replaceable install block: the runtime stage copies it. *)
-  let* builder =
-    stage (Image resolved.builder)
-      ([ Workdir "/app"; Env env; venv ]
-      @
-      match app.inputs with
-      | Whole_source ->
-          (copy_source :: app.install_commands (setup @ commands)) @ app.build
-      | Manifests paths ->
-          app.install_commands (Source.manifests paths @ setup @ commands)
-          @ (copy_source :: finish) @ app.build)
+  (* The venv precedes the replaceable install block: the runtime stage copies it.
+     Manifest-first builds install into a dependency stage that ends before the
+     source copy, so a source edit leaves that stage's snapshot, and the venv
+     copied from it, unchanged. *)
+  let* dependencies, build =
+    match app.inputs with
+    | Whole_source ->
+        let+ builder =
+          stage (Image resolved.builder)
+            ([ Workdir "/app"; Env env; venv ]
+            @ (copy_source :: app.install_commands (setup @ commands))
+            @ app.build)
+        in
+        (builder, builder)
+    | Manifests paths ->
+        let* dependencies =
+          stage (Image resolved.builder)
+            ([ Workdir "/app"; Env env; venv ]
+            @ app.install_commands (Source.manifests paths @ setup @ commands))
+        in
+        let+ build =
+          stage (Stage dependencies) ((copy_source :: finish) @ app.build)
+        in
+        (dependencies, build)
   in
+  (* Build commands do not change the venv of a manifest-first image; a uv
+     packaged project installs itself after the source copy, so its venv comes
+     from the build stage. *)
+  let venv_source = if finish = [] then dependencies else build in
   stage (Image resolved.runtime)
     [
       Workdir "/app";
       Env env;
-      copy ~owner:(1000, 1000) builder [ "/opt/venv/" ] "/opt/venv/";
-      copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
+      copy ~owner:(1000, 1000) venv_source [ "/opt/venv/" ] "/opt/venv/";
+      copy ~owner:(1000, 1000) build [ "/app/" ] "/app/";
       User (1000, 1000);
       Entrypoint None;
       Start app.start;
