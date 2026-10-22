@@ -11,5 +11,8 @@ val shell : string -> (t, Kiln_core.Error.t) result
 val expand : t -> Build_plan.operation list -> Build_plan.operation list
 (** Replace each inheritance marker with the provider's commands, in order. *)
 
+val inherits : t -> bool
+(** Whether any command is an inheritance marker. *)
+
 val paths : t -> string list
 (** PATH additions in command order, for propagation to the runtime. *)

@@ -28,6 +28,7 @@ type application = {
   platforms : Platforms.t;
   requirements : Semver_image.requirements;
   install : Build_plan.argv;
+  install_commands : Build_plan.operation list -> Build_plan.operation list;
   build : Build_plan.operation list;
   start : Build_plan.argv option;
 }
@@ -178,6 +179,7 @@ let load request source =
     platforms = request.Request.platforms;
     requirements;
     install;
+    install_commands = Request.install_commands request;
     build =
       Request.build_command request
         (if List.assoc_opt "build" tasks = Some true then Some build_argv
@@ -218,8 +220,8 @@ let plan app resolved =
          Env env;
          mkdir;
          Source.copy ~exclude [ "." ] "/app/";
-         Run app.install;
        ]
+      @ app.install_commands [ Run app.install ]
       @ app.build)
   in
   stage (Image image)
