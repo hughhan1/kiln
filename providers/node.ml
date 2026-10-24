@@ -560,6 +560,10 @@ let id = "node"
 let public_name = id
 let exclude = [ "node_modules" ]
 
+(* Install commands keep generated dependency artifacts here, outside /app and
+   node_modules, so source copies and node_modules rewrites never touch them. *)
+let artifacts = "/opt/app-deps"
+
 let plan app r =
   let open Build_plan in
   let pm = name r.pm in
@@ -577,17 +581,24 @@ let plan app r =
         in
         [ Env env ]
   in
-  let* ci_env = environment [ ("CI", "true") ] in
+  let* ci_env = environment [ ("CI", "true"); ("APP_DEPS_DIR", artifacts) ] in
   let* runtime_env =
     environment
-      [ ("NODE_ENV", "production"); ("HOME", "/tmp"); ("PORT", "8080") ]
+      [
+        ("NODE_ENV", "production");
+        ("HOME", "/tmp");
+        ("PORT", "8080");
+        ("APP_DEPS_DIR", artifacts);
+      ]
   in
+  let* artifacts_dir = run [ "mkdir"; "-p"; artifacts ] in
+  (* The artifact directory precedes the replaceable install block. *)
   let* toolchain =
     stage (Image r.builder)
       ([ Workdir "/app"; Env ci_env ]
       @ manager_env
       @ List.map (fun command -> Run command) (Option.to_list r.manager_install)
-      )
+      @ [ artifacts_dir ])
   in
   let copy_source = Source.copy ~exclude [ "." ] "." in
   let install = Run app.install in
@@ -623,8 +634,11 @@ let plan app r =
           ])
         r.manager_install
     @ [
-        (* Build commands do not change the node_modules of a manifest-first
-           image. *)
+        (* Build commands do not change the node_modules or artifacts of a
+           manifest-first image. *)
+        copy ~owner:(10001, 10001) dependencies
+          [ artifacts ^ "/" ]
+          (artifacts ^ "/");
         copy ~owner:(10001, 10001)
           ~exclude:[ "*"; "!**/node_modules" ]
           dependencies [ "/app/" ] "/app/";

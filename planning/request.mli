@@ -21,9 +21,13 @@ type t = private {
           the whole source first. The full source copy and build commands follow
           either way. When Python installs from manifests, the image takes
           [/opt/venv] from a stage that ends with this block, and when Node
-          does, it takes every [node_modules] directory from such a stage, so
-          changes build commands make to them are not part of the image;
-          dependencies change through these commands. *)
+          does, it takes every [node_modules] directory and [/opt/app-deps] from
+          such a stage, so changes build commands make to them are not part of
+          the image; dependencies change through these commands. Node images
+          name [/opt/app-deps] in [APP_DEPS_DIR]: it exists before this block,
+          survives source edits and reinstalls of [node_modules], and holds
+          files these commands generate for the application, such as downloaded
+          models. *)
   platforms : Platforms.t;
   start : startup option;
   error_missing_start : bool;
