@@ -175,6 +175,26 @@ let selected_manager pkg (snapshot : snapshot) =
       then manager first.Javascript.name
       else Error (Error.Conflict "explicit package managers")
 
+(* The source-relative path of a local dependency declared by the manifest
+   [from], or [None] when it is absolute or names the source root. Loading has
+   already rejected targets outside the source. *)
+let local_input ~from reference =
+  let rec normalize parts = function
+    | [] -> Some (List.rev parts)
+    | ("" | ".") :: rest -> normalize parts rest
+    | ".." :: rest -> (
+        match parts with [] -> None | _ :: parts -> normalize parts rest)
+    | part :: rest -> normalize (part :: parts) rest
+  in
+  if not (Filename.is_relative reference) then None
+  else
+    match
+      normalize []
+        (String.split_on_char '/' (Filename.dirname from ^ "/" ^ reference))
+    with
+    | None | Some [] -> None
+    | Some parts -> Some (String.concat "/" parts)
+
 let install_inputs (snapshot : snapshot) =
   let requires_source (_, package) =
     package.Javascript.needs_source
@@ -201,19 +221,44 @@ let install_inputs (snapshot : snapshot) =
            || String.starts_with ~prefix:"patches/" path)
          snapshot.files
   in
-  if full then Whole_source
+  (* Local packages are dependency inputs: they are copied whole, with the
+     manifests, before installation. Workspace projects keep installing from
+     the whole source when they reference local packages. *)
+  let workspaces =
+    Option.is_some snapshot.workspace
+    || List.exists
+         (fun (_, package) -> package.Javascript.workspaces <> [])
+         snapshot.packages
+  in
+  let references =
+    List.concat_map
+      (fun (from, package) ->
+        List.map (local_input ~from) package.Javascript.references)
+      snapshot.packages
+  in
+  if full || List.mem None references || (workspaces && references <> []) then
+    Whole_source
   else
+    let referenced path =
+      List.exists
+        (function
+          | Some target ->
+              path = target || String.starts_with ~prefix:(target ^ "/") path
+          | None -> false)
+        references
+    in
     Manifests
       (List.filter
          (fun path ->
-           List.mem (Filename.basename path)
-             [
-               "package.json";
-               "package-lock.json";
-               "npm-shrinkwrap.json";
-               "pnpm-lock.yaml";
-               "pnpm-workspace.yaml";
-             ])
+           referenced path
+           || List.mem (Filename.basename path)
+                [
+                  "package.json";
+                  "package-lock.json";
+                  "npm-shrinkwrap.json";
+                  "pnpm-lock.yaml";
+                  "pnpm-workspace.yaml";
+                ])
          snapshot.files)
 
 let interpret (request : Request.t) (snapshot : snapshot) =
