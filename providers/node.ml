@@ -594,14 +594,24 @@ let plan app r =
   in
   let copy_source = Source.copy ~exclude [ "." ] "." in
   let install = Run app.install in
-  let* build =
-    stage (Stage toolchain)
-      ((match app.inputs with
-         | Whole_source -> copy_source :: app.install_commands [ install ]
-         | Manifests paths ->
-             app.install_commands (Source.manifests paths @ [ install ])
-             @ [ copy_source ])
-      @ app.build)
+  (* Manifest-first builds install into a dependency stage that ends before the
+     source copy, so a source edit leaves that stage's snapshot, and the
+     node_modules copied from it, unchanged. *)
+  let* dependencies, build =
+    match app.inputs with
+    | Whole_source ->
+        let+ build =
+          stage (Stage toolchain)
+            ((copy_source :: app.install_commands [ install ]) @ app.build)
+        in
+        (build, build)
+    | Manifests paths ->
+        let* dependencies =
+          stage (Stage toolchain)
+            (app.install_commands (Source.manifests paths @ [ install ]))
+        in
+        let+ build = stage (Stage dependencies) (copy_source :: app.build) in
+        (dependencies, build)
   in
   stage (Image r.runtime)
     ([ Workdir "/app"; Env runtime_env ]
@@ -616,9 +626,11 @@ let plan app r =
           ])
         r.manager_install
     @ [
+        (* Build commands do not change the node_modules of a manifest-first
+           image. *)
         copy ~owner:(10001, 10001)
           ~exclude:[ "*"; "!**/node_modules" ]
-          build [ "/app/" ] "/app/";
+          dependencies [ "/app/" ] "/app/";
         copy ~owner:(10001, 10001) ~exclude:[ "**/node_modules" ] build
           [ "/app/" ] "/app/";
         User (10001, 10001);

@@ -69,6 +69,21 @@ let steps prepared =
        (fun stage -> List.mem "source" (own_steps stage))
        (Build_plan.stages prepared.Planner.plan))
 
+(* Whether the runtime copies node_modules from a stage that copies the source. *)
+let modules_follow_source prepared =
+  List.exists
+    (function
+      | Build_plan.Copy { input; exclude; _ }
+        when List.mem "!**/node_modules" exclude -> (
+          match input with
+          | Build_plan.Output stage -> List.mem "source" (own_steps stage)
+          | Build_plan.Context | Build_plan.External _ -> false)
+      | Build_plan.Copy _ | Build_plan.Run _ | Build_plan.Workdir _
+      | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint _
+      | Build_plan.Start _ | Build_plan.Prepend_path _ | Build_plan.Write _ ->
+          false)
+    (Build_plan.operations prepared.Planner.plan)
+
 (* Whether the first step starting with each prefix occurs in list order. *)
 let ordered steps prefixes =
   let indices =
@@ -257,7 +272,9 @@ let () =
              "pnpm install";
              "source";
              "pnpm run build";
-           ]));
+           ]);
+      check "node_modules come from the stage before the source copy"
+        (not (modules_follow_source frozen)));
   (* Local packages inside the source install with the manifests unless they
      need the rest of the source or belong to a workspace project. *)
   let local_package ?(script = "") ?(workspace = "") root reference =
@@ -274,8 +291,10 @@ let () =
     (fun (label, setup, expected) ->
       snapshot label (fun root ->
           setup root;
-          check "local package inputs"
-            (ordered (steps (result root [])) expected)))
+          let prepared = result root [] in
+          check "local package inputs" (ordered (steps prepared) expected);
+          check "node_modules follow the source only when installation does"
+            (modules_follow_source prepared = (List.hd expected = "source"))))
     [
       ( "local package installs before the source copy",
         (fun root -> local_package root "file:./packages/local"),
@@ -310,6 +329,60 @@ let () =
           local_package root "file:packages/local";
           write root "pnpm-workspace.yaml" "packages:\n  - packages/*\n"),
         [ "source"; "pnpm install" ] );
+    ];
+  (* Dependency layout: manifests install in a stage of their own unless
+     installation needs the source. *)
+  List.iter
+    (fun (label, pkg, manifests) ->
+      snapshot label (fun root ->
+          write root "package.json" pkg;
+          write root "package-lock.json" "{}";
+          let prepared = result root [] in
+          check "inputs precede installation, which precedes the build"
+            (ordered (steps prepared)
+               (if manifests then
+                  [
+                    "manifest package-lock.json package.json";
+                    "npm install";
+                    "source";
+                    "npm run build";
+                  ]
+                else [ "source"; "npm install"; "npm run build" ]));
+          check "node_modules follow the source only when installation does"
+            (modules_follow_source prepared = not manifests)))
+    [
+      ( "manifest-first install",
+        {|{"main":"main.js","scripts":{"build":"node build.js"}}|},
+        true );
+      ( "lifecycle script installs from the source",
+        {|{"main":"main.js","scripts":{"build":"node build.js","postinstall":"node setup.js"}}|},
+        false );
+    ];
+  List.iter
+    (fun (commands, expected) ->
+      snapshot ("install commands " ^ commands) (fun root ->
+          write root "railpack.json"
+            ({|{"steps":{"install":{"commands":|} ^ commands ^ "}}}");
+          let prepared = result root [] in
+          check "configured commands join the dependency stage"
+            (ordered (steps prepared) expected);
+          check "node_modules come from the dependency stage"
+            (not (modules_follow_source prepared))))
+    [
+      ( {|["node -e 1", "..."]|},
+        [
+          "/bin/sh -c node -e 1";
+          "manifest package.json";
+          "npm install";
+          "source";
+        ] );
+      ( {|["...", "node -e 1"]|},
+        [
+          "manifest package.json";
+          "npm install";
+          "/bin/sh -c node -e 1";
+          "source";
+        ] );
     ];
   List.iter
     (fun (manager, version) ->

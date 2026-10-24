@@ -20,9 +20,10 @@ type t = private {
           after it on the dependency set. Without the marker the provider copies
           the whole source first. The full source copy and build commands follow
           either way. When Python installs from manifests, the image takes
-          [/opt/venv] from a stage that ends with this block, so changes build
-          commands make to the venv are not part of the image; dependencies
-          change through these commands. *)
+          [/opt/venv] from a stage that ends with this block, and when Node
+          does, it takes every [node_modules] directory from such a stage, so
+          changes build commands make to them are not part of the image;
+          dependencies change through these commands. *)
   platforms : Platforms.t;
   start : startup option;
   error_missing_start : bool;
