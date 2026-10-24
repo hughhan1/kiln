@@ -45,6 +45,7 @@ type package = {
   scripts : (string * string) list;
   main : string option;
   references : string list;
+  workspaces : string list;
   needs_source : bool;
 }
 
@@ -148,9 +149,8 @@ let package bytes =
       scripts;
       main;
       references;
-      needs_source =
-        references <> [] || List.exists snd injected
-        || Json.member "pnpm" o <> `Null;
+      workspaces;
+      needs_source = List.exists snd injected || Json.member "pnpm" o <> `Null;
     }
 
 let has_script pkg name =

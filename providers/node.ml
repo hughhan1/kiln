@@ -135,14 +135,6 @@ let workspace bytes =
   if List.exists (fun key -> key <> "packages") keys then With_settings
   else Packages_only
 
-type snapshot = {
-  files : string list;
-  packages : (string * Javascript.package) list;
-  version_files : Package.requirement list;
-  workspace : workspace option;
-  source_links : bool;
-}
-
 type inputs = Whole_source | Manifests of string list
 
 type application = {
@@ -161,21 +153,39 @@ type application = {
   fingerprint : string;
 }
 
-let selected_manager pkg (snapshot : snapshot) =
+let selected_manager pkg files workspace =
   match pkg.Javascript.managers with
   | [] ->
       Ok
-        (if
-           List.mem "pnpm-lock.yaml" snapshot.files
-           || Option.is_some snapshot.workspace
-         then Pnpm
+        (if List.mem "pnpm-lock.yaml" files || Option.is_some workspace then
+           Pnpm
          else Npm)
   | first :: rest ->
       if List.for_all (fun d -> d.Javascript.name = first.Javascript.name) rest
       then manager first.Javascript.name
       else Error (Error.Conflict "explicit package managers")
 
-let install_inputs (snapshot : snapshot) =
+(* The source-relative path of a local dependency declared by the manifest
+   [from], or [None] when it is absolute or names the source root. Loading has
+   already rejected targets outside the source. *)
+let local_input ~from reference =
+  let rec normalize parts = function
+    | [] -> Some (List.rev parts)
+    | ("" | ".") :: rest -> normalize parts rest
+    | ".." :: rest -> (
+        match parts with [] -> None | _ :: parts -> normalize parts rest)
+    | part :: rest -> normalize (part :: parts) rest
+  in
+  if not (Filename.is_relative reference) then None
+  else
+    match
+      normalize []
+        (String.split_on_char '/' (Filename.dirname from ^ "/" ^ reference))
+    with
+    | None | Some [] -> None
+    | Some parts -> Some (String.concat "/" parts)
+
+let install_inputs source packages workspace =
   let requires_source (_, package) =
     package.Javascript.needs_source
     || List.exists
@@ -191,33 +201,65 @@ let install_inputs (snapshot : snapshot) =
          ]
   in
   let full =
-    snapshot.source_links
-    || snapshot.workspace = Some With_settings
-    || List.exists requires_source snapshot.packages
+    source.Source.links
+    || workspace = Some With_settings
+    || List.exists requires_source packages
     || List.exists
          (fun path ->
            List.mem (Filename.basename path)
              [ "binding.gyp"; ".npmrc"; ".pnpmfile.cjs"; "pnpmfile.cjs" ]
            || String.starts_with ~prefix:"patches/" path)
-         snapshot.files
+         source.Source.files
   in
-  if full then Whole_source
+  (* Local packages are dependency inputs: they are copied whole, with the
+     manifests, before installation. Workspace projects keep installing from
+     the whole source when they reference local packages. *)
+  let workspaces =
+    Option.is_some workspace
+    || List.exists
+         (fun (_, package) -> package.Javascript.workspaces <> [])
+         packages
+  in
+  let references =
+    List.concat_map
+      (fun (from, package) ->
+        List.map (local_input ~from) package.Javascript.references)
+      packages
+  in
+  if full || List.mem None references || (workspaces && references <> []) then
+    Whole_source
   else
+    let references = List.filter_map Fun.id references in
     Manifests
       (List.filter
          (fun path ->
-           List.mem (Filename.basename path)
-             [
-               "package.json";
-               "package-lock.json";
-               "npm-shrinkwrap.json";
-               "pnpm-lock.yaml";
-               "pnpm-workspace.yaml";
-             ])
-         snapshot.files)
+           List.exists (fun target -> Support.inside target path) references
+           || List.mem (Filename.basename path)
+                [
+                  "package.json";
+                  "package-lock.json";
+                  "npm-shrinkwrap.json";
+                  "pnpm-lock.yaml";
+                  "pnpm-workspace.yaml";
+                ])
+         source.Source.files)
 
-let interpret (request : Request.t) (snapshot : snapshot) =
-  let packages = snapshot.packages in
+let load request source =
+  let* packages = Javascript.load source in
+  let* versions =
+    Support.traverse
+      (fun path ->
+        let+ version = Source.version source path in
+        Package.optional path version)
+      [ ".node-version"; ".nvmrc" ]
+  in
+  let* workspace =
+    if Source.has source "pnpm-workspace.yaml" then
+      let* bytes = source.Source.read "pnpm-workspace.yaml" in
+      let+ workspace = workspace bytes in
+      Some workspace
+    else Ok None
+  in
   let* pkg =
     match List.assoc_opt "package.json" packages with
     | Some p -> Ok p
@@ -231,14 +273,14 @@ let interpret (request : Request.t) (snapshot : snapshot) =
   in
   let node_declarations =
     Request.defaults request "node"
-      (snapshot.version_files
+      (List.concat versions
       @ Package.optional "package.json engines.node"
           (List.assoc_opt "node" pkg.Javascript.engines)
       @ Javascript.requests ~path:"package.json" pkg.Javascript.runtimes)
   in
   let nodes_text = Package.versions node_declarations in
   let* nodes = Support.traverse node_request nodes_text in
-  let* pm = selected_manager pkg snapshot in
+  let* pm = selected_manager pkg source.Source.files workspace in
   let manager_declarations =
     Request.defaults request (name pm)
       (Javascript.requests ~path:"package.json" pkg.Javascript.managers)
@@ -253,7 +295,7 @@ let interpret (request : Request.t) (snapshot : snapshot) =
   in
   let inputs =
     if Request.replaces_install request then Whole_source
-    else install_inputs snapshot
+    else install_inputs source packages workspace
   in
   let fingerprint =
     Registry.sha256
@@ -280,7 +322,7 @@ let interpret (request : Request.t) (snapshot : snapshot) =
       ([ name pm; "install" ]
       @
       match pm with
-      | Pnpm when List.mem "pnpm-lock.yaml" snapshot.files ->
+      | Pnpm when List.mem "pnpm-lock.yaml" source.Source.files ->
           [ "--frozen-lockfile"; "--prefer-offline" ]
       | Npm | Pnpm -> [])
   in
@@ -549,14 +591,24 @@ let plan app r =
   in
   let copy_source = Source.copy ~exclude [ "." ] "." in
   let install = Run app.install in
-  let* build =
-    stage (Stage toolchain)
-      ((match app.inputs with
-         | Whole_source -> copy_source :: app.install_commands [ install ]
-         | Manifests paths ->
-             app.install_commands (Source.manifests paths @ [ install ])
-             @ [ copy_source ])
-      @ app.build)
+  (* Manifest-first builds install into a dependency stage that ends before the
+     source copy, so a source edit leaves that stage's snapshot, and the
+     node_modules copied from it, unchanged. *)
+  let* dependencies, build =
+    match app.inputs with
+    | Whole_source ->
+        let+ build =
+          stage (Stage toolchain)
+            ((copy_source :: app.install_commands [ install ]) @ app.build)
+        in
+        (build, build)
+    | Manifests paths ->
+        let* dependencies =
+          stage (Stage toolchain)
+            (app.install_commands (Source.manifests paths @ [ install ]))
+        in
+        let+ build = stage (Stage dependencies) (copy_source :: app.build) in
+        (dependencies, build)
   in
   stage (Image r.runtime)
     ([ Workdir "/app"; Env runtime_env ]
@@ -571,9 +623,11 @@ let plan app r =
           ])
         r.manager_install
     @ [
+        (* Build commands do not change the node_modules of a manifest-first
+           image. *)
         copy ~owner:(10001, 10001)
           ~exclude:[ "*"; "!**/node_modules" ]
-          build [ "/app/" ] "/app/";
+          dependencies [ "/app/" ] "/app/";
         copy ~owner:(10001, 10001) ~exclude:[ "**/node_modules" ] build
           [ "/app/" ] "/app/";
         User (10001, 10001);
@@ -593,31 +647,6 @@ let detect source =
            pkg.Javascript.runtimes
     then Provider.Explicit
     else Provider.Fallback
-
-let load request source =
-  let* packages = Javascript.load source in
-  let* versions =
-    Support.traverse
-      (fun path ->
-        let+ version = Source.version source path in
-        Package.optional path version)
-      [ ".node-version"; ".nvmrc" ]
-  in
-  let* workspace =
-    if Source.has source "pnpm-workspace.yaml" then
-      let* bytes = source.Source.read "pnpm-workspace.yaml" in
-      let+ workspace = workspace bytes in
-      Some workspace
-    else Ok None
-  in
-  interpret request
-    {
-      files = source.Source.files;
-      packages;
-      version_files = List.concat versions;
-      workspace;
-      source_links = source.Source.links;
-    }
 
 let startup app = app.command
 let fingerprint app = app.fingerprint
