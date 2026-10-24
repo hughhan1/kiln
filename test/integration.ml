@@ -114,6 +114,20 @@ let install_commands binary source name =
          variables)
     ~rejected:false source plan
 
+(* Install commands keep generated files outside node_modules; a build command
+   that removes node_modules cannot reach them. *)
+let dependency_artifacts ~env binary source =
+  write source "railpack.json"
+    {|{
+      "steps": {
+        "install": {"commands": ["...", "node -e 'require(\"fs\").writeFileSync(process.env.APP_DEPS_DIR + \"/message\", \"kiln smoke\")'"]},
+        "build": {"commands": ["rm -rf node_modules"]}
+      },
+      "deploy": {"startCommand": "test \"$APP_DEPS_DIR\" = /opt/app-deps && test -O \"$APP_DEPS_DIR\" && test -O \"$APP_DEPS_DIR/message\" && node -e 'require(\"local\"); console.log(require(\"fs\").readFileSync(process.env.APP_DEPS_DIR + \"/message\", \"utf8\"))'"}
+    }|};
+  let plan = prepare ~env binary source [] in
+  container ~rejected:false source plan
+
 let application_environment binary source =
   let secret = "private\nmultiline value" in
   let literal = "$HOME \\path \"quoted\"\tend" in
@@ -179,7 +193,8 @@ let exercise binary name =
         container ~rejected:true source plan);
       if name = "node-npm" then (
         configured_commands ~env binary source;
-        application_environment binary source))
+        application_environment binary source;
+        dependency_artifacts ~env binary source))
 
 let () =
   if Array.length Sys.argv <> 2 then

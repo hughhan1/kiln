@@ -62,8 +62,9 @@ let layout prepared =
   let copies =
     List.filter_map
       (function
-        | Build_plan.Copy { input = Build_plan.Output stage; exclude; _ } ->
-            Some (exclude, stage)
+        | Build_plan.Copy { input = Build_plan.Output stage; exclude; paths; _ }
+          ->
+            Some ((exclude, paths), stage)
         | Build_plan.Copy
             { input = Build_plan.Context | Build_plan.External _; _ }
         | Build_plan.Run _ | Build_plan.Workdir _ | Build_plan.Env _
@@ -72,11 +73,15 @@ let layout prepared =
             None)
       (Build_plan.operations prepared.Planner.plan)
   in
-  let dependencies = List.assoc [ "*"; "!**/node_modules" ] copies in
-  let build = List.assoc [ "**/node_modules" ] copies in
+  let dependencies =
+    List.assoc ([ "*"; "!**/node_modules" ], [ "/app/" ]) copies
+  in
+  let build = List.assoc ([ "**/node_modules" ], [ "/app/" ]) copies in
   check "build inherits installed dependencies"
     (dependencies == build
     || Build_plan.base build = Build_plan.Stage dependencies);
+  check "dependency artifacts come from the dependency stage"
+    (List.assoc ([], [ "/opt/app-deps/" ]) copies == dependencies);
   (steps dependencies, steps build)
 
 let local_package ?(script = "") ?(workspace = "") root reference =
@@ -112,9 +117,21 @@ let () =
             && member "requestedVersion" package = `Null
             && member "source" package = `String source))
         [ ("node", "kiln default"); ("npm", "bundled with Node") ];
-      check "locked npm dependencies precede the source in a separate stage"
+      check
+        "locked npm dependencies and artifacts precede the source in a \
+         separate stage"
         (layout plan
         = ([ "package-lock.json package.json"; "npm install" ], [ "." ]));
+      check "install and start commands see the artifact directory"
+        (contains
+           (Build_plan.dockerfile plan.Planner.plan)
+           "RUN [\"mkdir\",\"-p\",\"/opt/app-deps\"]"
+        && List.length
+             (String.split_on_char '\n'
+                (Build_plan.dockerfile plan.Planner.plan)
+             |> List.filter (fun line ->
+                 contains line "APP_DEPS_DIR=\"/opt/app-deps\""))
+           = 2);
       check "main startup" (startup plan = Some [ "node"; "main.js" ]));
   snapshot "reuse and invalidation" (fun root ->
       let initial = result root [] in
