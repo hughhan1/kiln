@@ -13,7 +13,10 @@ type package = {
   scripts : (string * string) list;
   main : string option;
   references : string list;
+  workspaces : string list;
   needs_source : bool;
+      (** Installation needs the whole source: injected dependencies or pnpm
+          settings. Local [references] are judged by the provider. *)
 }
 
 val algorithm : algorithm -> string

@@ -41,6 +41,61 @@ let failure expected = function
   | Error error ->
       check (Error.show error) (contains (Error.show error) expected)
 
+(* Build steps as text: context copies and RUN argv. *)
+let step = function
+  | Build_plan.Copy { input = Build_plan.Context; paths = [ "." ]; _ } ->
+      Some "source"
+  | Build_plan.Copy { input = Build_plan.Context; paths; _ } ->
+      Some ("manifest " ^ String.concat " " paths)
+  | Build_plan.Run argv -> Some (String.concat " " (Build_plan.arguments argv))
+  | Build_plan.Copy { input = Build_plan.Output _ | Build_plan.External _; _ }
+  | Build_plan.Workdir _ | Build_plan.Env _ | Build_plan.User _
+  | Build_plan.Entrypoint _ | Build_plan.Start _ | Build_plan.Prepend_path _
+  | Build_plan.Write _ ->
+      None
+
+let own_steps stage = List.filter_map step (Build_plan.operations stage)
+
+(* Steps of a stage preceded by those of the stages it is built from. *)
+let rec inherited_steps stage =
+  (match Build_plan.base stage with
+    | Build_plan.Stage parent -> inherited_steps parent
+    | Build_plan.Image _ -> [])
+  @ own_steps stage
+
+let steps prepared =
+  inherited_steps
+    (List.find
+       (fun stage -> List.mem "source" (own_steps stage))
+       (Build_plan.stages prepared.Planner.plan))
+
+(* Whether the runtime copies node_modules from a stage that copies the source. *)
+let modules_follow_source prepared =
+  List.exists
+    (function
+      | Build_plan.Copy { input; exclude; _ }
+        when List.mem "!**/node_modules" exclude -> (
+          match input with
+          | Build_plan.Output stage -> List.mem "source" (own_steps stage)
+          | Build_plan.Context | Build_plan.External _ -> false)
+      | Build_plan.Copy _ | Build_plan.Run _ | Build_plan.Workdir _
+      | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint _
+      | Build_plan.Start _ | Build_plan.Prepend_path _ | Build_plan.Write _ ->
+          false)
+    (Build_plan.operations prepared.Planner.plan)
+
+(* Whether the first step starting with each prefix occurs in list order. *)
+let ordered steps prefixes =
+  let indices =
+    List.map
+      (fun prefix ->
+        match List.find_index (String.starts_with ~prefix) steps with
+        | Some index -> index
+        | None -> failwith ("missing step: " ^ prefix))
+      prefixes
+  in
+  indices = List.sort_uniq Int.compare indices
+
 let workspace root =
   Unix.mkdir (Filename.concat root "packages") 0o700;
   Unix.mkdir (Filename.concat root "packages/local") 0o700;
@@ -208,7 +263,127 @@ let () =
           [ platforms; ("resolution", resolved plan) ]
       in
       check "lockfile freezes installation"
-        (runs "pnpm install --frozen-lockfile" frozen));
+        (runs "pnpm install --frozen-lockfile" frozen);
+      check "workspace manifests install before the source copy"
+        (ordered (steps frozen)
+           [
+             "manifest package.json pnpm-lock.yaml pnpm-workspace.yaml";
+             "manifest packages/local/package.json";
+             "pnpm install";
+             "source";
+             "pnpm run build";
+           ]);
+      check "node_modules come from the stage before the source copy"
+        (not (modules_follow_source frozen)));
+  (* Local packages inside the source install with the manifests unless they
+     need the rest of the source or belong to a workspace project. *)
+  let local_package ?(script = "") ?(workspace = "") root reference =
+    Unix.mkdir (Filename.concat root "packages") 0o700;
+    Unix.mkdir (Filename.concat root "packages/local") 0o700;
+    write root "packages/local/index.js" "";
+    write root "packages/local/package.json"
+      (Printf.sprintf {|{"name":"local","scripts":{%s}}|} script);
+    write root "package.json"
+      (Printf.sprintf {|{"main":"main.js",%s"dependencies":{"local":"%s"}}|}
+         workspace reference)
+  in
+  List.iter
+    (fun (label, setup, expected) ->
+      snapshot label (fun root ->
+          setup root;
+          let prepared = result root [] in
+          check "local package inputs" (ordered (steps prepared) expected);
+          check "node_modules follow the source only when installation does"
+            (modules_follow_source prepared = (List.hd expected = "source"))))
+    [
+      ( "local package installs before the source copy",
+        (fun root -> local_package root "file:./packages/local"),
+        [
+          "manifest package.json";
+          "manifest packages/local/index.js packages/local/package.json";
+          "npm install";
+          "source";
+        ] );
+      ( "normalized linked package",
+        (fun root -> local_package root "link:./packages/../packages/local"),
+        [
+          "manifest packages/local/index.js packages/local/package.json";
+          "npm install";
+          "source";
+        ] );
+      ( "local package that builds from the source installs from it",
+        (fun root ->
+          local_package ~script:{|"prepare":"node ../../build.js"|} root
+            "file:packages/local"),
+        [ "source"; "npm install" ] );
+      ( "source root package installs from the source",
+        (fun root -> local_package root "file:."),
+        [ "source"; "npm install" ] );
+      ( "npm workspace keeps local packages in the source",
+        (fun root ->
+          local_package ~workspace:{|"workspaces":["packages/*"],|} root
+            "file:packages/local"),
+        [ "source"; "npm install" ] );
+      ( "pnpm workspace keeps local packages in the source",
+        (fun root ->
+          local_package root "file:packages/local";
+          write root "pnpm-workspace.yaml" "packages:\n  - packages/*\n"),
+        [ "source"; "pnpm install" ] );
+    ];
+  (* Dependency layout: manifests install in a stage of their own unless
+     installation needs the source. *)
+  List.iter
+    (fun (label, pkg, manifests) ->
+      snapshot label (fun root ->
+          write root "package.json" pkg;
+          write root "package-lock.json" "{}";
+          let prepared = result root [] in
+          check "inputs precede installation, which precedes the build"
+            (ordered (steps prepared)
+               (if manifests then
+                  [
+                    "manifest package-lock.json package.json";
+                    "npm install";
+                    "source";
+                    "npm run build";
+                  ]
+                else [ "source"; "npm install"; "npm run build" ]));
+          check "node_modules follow the source only when installation does"
+            (modules_follow_source prepared = not manifests)))
+    [
+      ( "manifest-first install",
+        {|{"main":"main.js","scripts":{"build":"node build.js"}}|},
+        true );
+      ( "lifecycle script installs from the source",
+        {|{"main":"main.js","scripts":{"build":"node build.js","postinstall":"node setup.js"}}|},
+        false );
+    ];
+  List.iter
+    (fun (commands, expected) ->
+      snapshot ("install commands " ^ commands) (fun root ->
+          write root "railpack.json"
+            ({|{"steps":{"install":{"commands":|} ^ commands ^ "}}}");
+          let prepared = result root [] in
+          check "configured commands join the dependency stage"
+            (ordered (steps prepared) expected);
+          check "node_modules come from the dependency stage"
+            (not (modules_follow_source prepared))))
+    [
+      ( {|["node -e 1", "..."]|},
+        [
+          "/bin/sh -c node -e 1";
+          "manifest package.json";
+          "npm install";
+          "source";
+        ] );
+      ( {|["...", "node -e 1"]|},
+        [
+          "manifest package.json";
+          "npm install";
+          "/bin/sh -c node -e 1";
+          "source";
+        ] );
+    ];
   List.iter
     (fun (manager, version) ->
       let node = "24.21.0" in
