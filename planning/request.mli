@@ -6,6 +6,7 @@ type startup
 
 type t = private {
   source : string;
+  directory : string;
   environment : Environment.t;
   secrets : Environment.Names.t;
   install : Build_plan.argv option;

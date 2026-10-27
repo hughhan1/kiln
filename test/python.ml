@@ -796,4 +796,35 @@ let () =
       );
       ("uv requires project", [ ("main.py", ""); ("uv.lock", "version=1\n") ]);
     ];
+  snapshot [] "service directory preserves the common source tree" (fun root ->
+      List.iter
+        (fun path -> Unix.mkdir (Filename.concat root path) 0o755)
+        [ "app"; "app/users"; "app/mysql" ];
+      List.iter
+        (fun (path, contents) -> write root path contents)
+        [
+          ("app/users/server.py", "from app.mysql import connect\n");
+          ("app/mysql/__init__.py", "def connect(): pass\n");
+          ( "app/users/pyproject.toml",
+            "[project]\n\
+             name='users'\n\
+             version='1'\n\
+             requires-python='>=3.12,<3.13'\n" );
+          ("app/users/uv.lock", "version=1\n");
+        ];
+      let prepared = ok (prepare root [ ("directory", `String "app/users") ]) in
+      let recipe = Planner.dockerfile prepared in
+      check "service working directory"
+        (contains recipe "WORKDIR \"/app/app/users\"");
+      check "service dependency manifests"
+        (contains recipe "app/users/pyproject.toml");
+      check "common source copy" (contains recipe "[\".\",\"/app/\"]");
+      check "runtime preserves siblings"
+        (contains recipe "[\"/app/\",\"/app/\"]");
+      List.iter
+        (fun directory ->
+          check "directory cannot escape source"
+            (Result.is_error
+               (prepare root [ ("directory", `String directory) ])))
+        [ "../"; "/tmp"; "missing" ]);
   finish ()

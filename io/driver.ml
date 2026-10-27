@@ -90,7 +90,14 @@ let prepare_request ~providers ~cancelled ~today ~fetch (request : Request.t) =
     then
       Error (Error.Filesystem "source must be an existing absolute directory")
     else
-      let root = Unix.realpath request.Request.source in
+      let context = Unix.realpath request.Request.source in
+      let root =
+        Unix.realpath (Filename.concat context request.Request.directory)
+      in
+      let* () =
+        if Support.inside context root then Ok ()
+        else Error (Error.Containment request.Request.directory)
+      in
       let files =
         Array.to_list (Sys.readdir root) |> List.sort String.compare
       in

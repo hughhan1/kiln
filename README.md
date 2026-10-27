@@ -52,3 +52,16 @@ Usage: kiln prepare [OPTIONS] DIRECTORY
 
 The C and OCaml APIs prepare build recipes in-process. Run the returned
 Dockerfile with BuildKit.
+
+### Services in a common source tree
+
+Library requests may set `directory` to a service directory within `source`:
+
+```json
+{"source":"/project","directory":"app/users","platforms":["linux/amd64"]}
+```
+
+Provider detection, configuration and dependency installation use that directory.
+The Dockerfile preserves the complete source tree under `/app` and runs build and
+startup commands from `/app/app/users`. Omit `directory` for the existing root
+behavior. Absolute paths, parent traversal and symlinks escaping `source` are rejected.

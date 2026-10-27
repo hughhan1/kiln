@@ -4,6 +4,7 @@ type startup = Native of Build_plan.argv | Shell of Build_plan.argv
 
 type t = {
   source : string;
+  directory : string;
   environment : Environment.t;
   secrets : Environment.Names.t;
   install : Build_plan.argv option;
@@ -59,6 +60,10 @@ let decode fields =
   in
   let* install = configured "INSTALL_CMD" Build_plan.shell None in
   let* source = Json.field "source" Json.string fields in
+  let* directory =
+    Json.field "directory" (Json.default "." Json.string) fields
+  in
+  let* () = Source.workspace [ directory ] in
   let* platforms =
     Json.field "platforms"
       (Json.default [ Default_platform.name ] (Json.list Json.string))
@@ -100,6 +105,7 @@ let decode fields =
   in
   {
     source;
+    directory;
     environment;
     secrets = Environment.names environment;
     install;

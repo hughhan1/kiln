@@ -180,7 +180,10 @@ let external_image reference =
   then Ok (External reference)
   else Error (Error.Metadata ("image", "invalid image reference"))
 
-let dockerfile ?(secrets = Environment.Names.empty) root =
+let dockerfile ?(directory = ".") ?(secrets = Environment.Names.empty) root =
+  let in_directory path =
+    if directory = "." then path else Filename.concat directory path
+  in
   let mounts =
     String.concat ""
       (List.map
@@ -216,6 +219,12 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
   and operation = function
     | Run args -> "RUN " ^ mounts ^ json (arguments args)
     | Copy { input; paths; exclude; destination; owner } ->
+        let paths =
+          match input with
+          | Context when paths <> [ "." ] || destination <> "/app/" ->
+              List.map in_directory paths
+          | Context | Output _ | External _ -> paths
+        in
         let prefix =
           match input with
           | Context -> ""
@@ -230,7 +239,13 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
         "COPY " ^ prefix ^ owner
         ^ String.concat "" (List.map (fun p -> "--exclude=" ^ p ^ " ") exclude)
         ^ json (paths @ [ destination ])
-    | Workdir path -> "WORKDIR " ^ Json.encode (`String path)
+    | Workdir path ->
+        let path =
+          if path = "/app" && directory <> "." then
+            Filename.concat path directory
+          else path
+        in
+        "WORKDIR " ^ Json.encode (`String path)
     | Env pairs ->
         "ENV "
         ^ String.concat " "

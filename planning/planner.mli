@@ -2,6 +2,7 @@
 
 type prepared = private {
   plan : Build_plan.t;
+  directory : string;
   secrets : Environment.Names.t;
   resolution : Yojson.Basic.t;
   detected : string list;

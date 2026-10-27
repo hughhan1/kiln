@@ -73,7 +73,8 @@ val startup : t -> argv option
 (** The last CMD in this stage, or an inherited CMD unless ENTRYPOINT resets it.
 *)
 
-val dockerfile : ?secrets:Environment.Names.t -> t -> string
+val dockerfile :
+  ?directory:string -> ?secrets:Environment.Names.t -> t -> string
 (** Render dependencies once, with stable stage names and JSON-escaped argument
     arrays. Mount each supplied secret as a required environment variable on RUN
     operations; values are never written into the Dockerfile. *)

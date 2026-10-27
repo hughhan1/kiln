@@ -2,6 +2,7 @@ open Result.Syntax
 
 type prepared = {
   plan : Build_plan.t;
+  directory : string;
   secrets : Environment.Names.t;
   resolution : Yojson.Basic.t;
   detected : string list;
@@ -67,6 +68,7 @@ let prepare { Provider.provider = (module P); detected } ~today ~fetch
   in
   {
     plan;
+    directory = request.Request.directory;
     secrets = request.Request.secrets;
     detected;
     packages = P.packages app resolved;
@@ -116,7 +118,8 @@ let failure error =
   ]
 
 let dockerfile prepared =
-  Build_plan.dockerfile ~secrets:prepared.secrets prepared.plan
+  Build_plan.dockerfile ~directory:prepared.directory ~secrets:prepared.secrets
+    prepared.plan
 
 let encode prepared =
   Json.encode
