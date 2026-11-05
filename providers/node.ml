@@ -141,6 +141,7 @@ type snapshot = {
   version_files : Package.requirement list;
   workspace : workspace option;
   source_links : bool;
+  source_config : bool;
 }
 
 type inputs = Whole_source | Manifests of string list
@@ -191,13 +192,13 @@ let install_inputs (snapshot : snapshot) =
          ]
   in
   let full =
-    snapshot.source_links
+    snapshot.source_links || snapshot.source_config
     || snapshot.workspace = Some With_settings
     || List.exists requires_source snapshot.packages
     || List.exists
          (fun path ->
            List.mem (Filename.basename path)
-             [ "binding.gyp"; ".npmrc"; ".pnpmfile.cjs"; "pnpmfile.cjs" ]
+             [ "binding.gyp"; ".pnpmfile.cjs"; "pnpmfile.cjs" ]
            || String.starts_with ~prefix:"patches/" path)
          snapshot.files
   in
@@ -213,6 +214,7 @@ let install_inputs (snapshot : snapshot) =
                "npm-shrinkwrap.json";
                "pnpm-lock.yaml";
                "pnpm-workspace.yaml";
+               ".npmrc";
              ])
          snapshot.files)
 
@@ -572,10 +574,11 @@ let plan app r =
         r.manager_install
     @ [
         copy ~owner:(10001, 10001)
-          ~exclude:[ "*"; "!**/node_modules" ]
+          ~exclude:[ "*"; "!**/node_modules"; "**/node_modules/**/generated" ]
           build [ "/app/" ] "/app/";
-        copy ~owner:(10001, 10001) ~exclude:[ "**/node_modules" ] build
-          [ "/app/" ] "/app/";
+        copy ~owner:(10001, 10001)
+          ~exclude:[ "**/node_modules"; "!**/node_modules/**/generated" ]
+          build [ "/app/" ] "/app/";
         User (10001, 10001);
         Start app.command;
       ])
@@ -596,6 +599,28 @@ let detect source =
 
 let load request source =
   let* packages = Javascript.load source in
+  let* configs =
+    Support.traverse source.Source.read
+      (List.filter
+         (fun path -> Filename.basename path = ".npmrc")
+         source.Source.files)
+  in
+  let independent_config bytes =
+    List.for_all
+      (fun line ->
+        let line = String.trim line in
+        line = ""
+        || String.starts_with ~prefix:"#" line
+        || String.starts_with ~prefix:";" line
+        ||
+        match String.split_on_char '=' line with
+        | [ key; value ] ->
+            List.mem (String.trim key)
+              [ "audit"; "fund"; "progress"; "update-notifier" ]
+            && List.mem (String.trim value) [ "true"; "false" ]
+        | _ -> false)
+      (String.split_on_char '\n' bytes)
+  in
   let* versions =
     Support.traverse
       (fun path ->
@@ -617,6 +642,7 @@ let load request source =
       version_files = List.concat versions;
       workspace;
       source_links = source.Source.links;
+      source_config = not (List.for_all independent_config configs);
     }
 
 let startup app = app.command
