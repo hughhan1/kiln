@@ -13,20 +13,27 @@ let container ?(build_args = []) ?(env = Unix.environment ())
     ?(output = "type=docker") ?(expected_output = "kiln smoke") ~rejected source
     plan =
   let tag = "kiln-smoke:" ^ Filename.basename (Filename.dirname source) in
+  let archive = source ^ ".image.tar" in
   let docker args = run "docker" args in
   Fun.protect
     ~finally:(fun () ->
+      if Sys.file_exists archive then Sys.remove archive;
       try ignore (docker [ "image"; "rm"; "-f"; tag ])
       with Failure message -> prerr_endline message)
     (fun () ->
-      let build = [ "buildx"; "build"; "--output"; output; "-t"; tag ] in
+      let build =
+        [
+          "buildx"; "build"; "--output"; output ^ ",dest=" ^ archive; "-t"; tag;
+        ]
+      in
       ignore
         (run ~env
            ~exit_code:(if rejected then 1 else 0)
            "docker"
            (build @ build_args @ [ "-f"; plan; source ]));
       if rejected then []
-      else
+      else (
+        ignore (docker [ "load"; "--input"; archive ]);
         let user =
           String.trim
             (docker [ "inspect"; "--format"; "{{.Config.User}}"; tag ])
@@ -39,7 +46,7 @@ let container ?(build_args = []) ?(env = Unix.environment ())
           (String.trim (docker [ "run"; "--rm"; "--network=none"; tag ])
           = expected_output);
         docker [ "inspect"; "--format"; "{{json .RootFS.Layers}}"; tag ]
-        |> Yojson.Basic.from_string |> Yojson.Basic.Util.to_list)
+        |> Yojson.Basic.from_string |> Yojson.Basic.Util.to_list))
 
 let cli_arguments ~env binary source =
   let args = [ "node"; "-e"; "" ] in
