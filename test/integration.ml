@@ -274,5 +274,26 @@ let () =
     if Array.length Sys.argv = 2 then entries "test/apps"
     else Array.to_list (Array.sub Sys.argv 2 (Array.length Sys.argv - 2))
   in
-  List.iter (exercise binary) apps;
+  temporary (fun root ->
+      let builder = Filename.basename root in
+      Fun.protect
+        ~finally:(fun () ->
+          try ignore (run "docker" [ "buildx"; "rm"; builder ])
+          with Failure message -> prerr_endline message)
+        (fun () ->
+          ignore
+            (run "docker"
+               [
+                 "buildx";
+                 "create";
+                 "--name";
+                 builder;
+                 "--driver";
+                 "docker-container";
+                 "--driver-opt";
+                 "image=moby/buildkit:v0.33.1";
+                 "--bootstrap";
+               ]);
+          Unix.putenv "BUILDX_BUILDER" builder;
+          List.iter (exercise binary) apps));
   finish ()
