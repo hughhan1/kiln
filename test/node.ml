@@ -191,6 +191,40 @@ let () =
       ((fun path -> Unix.mkfifo path 0o600), "non-regular");
     ];
 
+  List.iter
+    (fun (config, scripts, isolated) ->
+      snapshot "installation configuration inputs" (fun root ->
+          write root ".npmrc" config;
+          write root "package.json" scripts;
+          let dockerfile = Planner.dockerfile (result root []) in
+          let position text =
+            Option.get (String.find_first ~sub:text dockerfile)
+          in
+          check "source scope at installation"
+            (position {|[".","."]|}
+            > position {|RUN ["npm","install"]|}
+            = isolated);
+          if isolated then
+            check "configuration is staged with manifests"
+              (position "\".npmrc\"" < position {|RUN ["npm","install"]|})))
+    [
+      ("audit=false\nfund=false\n", base, true);
+      ("; comment\n progress = true\nupdate-notifier=false\n", base, true);
+      ("cafile=./cert.pem\n", base, false);
+      ("audit=${AUDIT}\n", base, false);
+      ("fund=false\nunknown-option=true\n", base, false);
+      ( "audit=false\n",
+        {|{"main":"main.js","scripts":{"prepare":"node prepare.js"}}|},
+        false );
+    ];
+  snapshot "nested installation configuration" (fun root ->
+      write root ".npmrc" "audit=false\n";
+      Unix.mkdir (Filename.concat root "nested") 0o700;
+      write root "nested/.npmrc" "cafile=./cert.pem\n";
+      let dockerfile = Planner.dockerfile (result root []) in
+      let position text = Option.get (String.find_first ~sub:text dockerfile) in
+      check "all configuration must be source independent"
+        (position {|[".","."]|} < position {|RUN ["npm","install"]|}));
   (* Workspace configuration, startup, and lockfile handling. *)
   snapshot "workspace manifests and lockfile" (fun root ->
       workspace root;
