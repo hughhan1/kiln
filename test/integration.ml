@@ -24,7 +24,8 @@ let container ?(build_args = []) ?(env = Unix.environment ()) ~rejected source
            ~exit_code:(if rejected then 1 else 0)
            "docker"
            (build @ build_args @ [ "-f"; plan; source ]));
-      if not rejected then (
+      if rejected then []
+      else
         let user =
           String.trim
             (docker [ "inspect"; "--format"; "{{.Config.User}}"; tag ])
@@ -35,7 +36,9 @@ let container ?(build_args = []) ?(env = Unix.environment ()) ~rejected source
           | _ :: _ -> true);
         check "application output"
           (String.trim (docker [ "run"; "--rm"; "--network=none"; tag ])
-          = "kiln smoke")))
+          = "kiln smoke");
+        docker [ "inspect"; "--format"; "{{json .RootFS.Layers}}"; tag ]
+        |> Yojson.Basic.from_string |> Yojson.Basic.Util.to_list)
 
 let cli_arguments ~env binary source =
   let args = [ "node"; "-e"; "" ] in
@@ -81,7 +84,7 @@ let configured_commands ~env binary source =
     prepare ~env binary source
       [ "--build-cmd"; "exit 99"; "--start-cmd"; "exit 99" ]
   in
-  container ~rejected:false source plan
+  ignore (container ~rejected:false source plan)
 
 let install_commands binary source name =
   write source "install-input" "installed";
@@ -107,12 +110,13 @@ let install_commands binary source name =
       ~env binary source
       (List.concat_map (fun (name, _) -> [ "-e"; name ]) variables)
   in
-  container ~env
-    ~build_args:
-      (List.concat_map
-         (fun (name, _) -> [ "--secret"; "id=" ^ name ^ ",env=" ^ name ])
-         variables)
-    ~rejected:false source plan
+  ignore
+    (container ~env
+       ~build_args:
+         (List.concat_map
+            (fun (name, _) -> [ "--secret"; "id=" ^ name ^ ",env=" ^ name ])
+            variables)
+       ~rejected:false source plan)
 
 let application_environment binary source =
   let secret = "private\nmultiline value" in
@@ -156,9 +160,77 @@ let application_environment binary source =
         "test \"$TOKEN\" = \"$(printf 'private\\nmultiline value')\"";
       ]
   in
-  container ~env
-    ~build_args:[ "--secret"; "id=TOKEN,env=TOKEN" ]
-    ~rejected:false source plan
+  ignore
+    (container ~env
+       ~build_args:[ "--secret"; "id=TOKEN,env=TOKEN" ]
+       ~rejected:false source plan)
+
+let generated_layers ~env binary source =
+  write source "railpack.json" "{}";
+  write source "package.json"
+    {|{"main":"main.js","scripts":{"build":"node build.js"}}|};
+  let packages =
+    {|["node_modules/plain","node_modules/.pnpm/client@1/node_modules/client","node_modules/@scope/client","workspace/node_modules/client","generated/node_modules/client"]|}
+  in
+  write source "build.js"
+    ("const packages = " ^ packages
+   ^ {|;
+const fs = require("node:fs");
+const revision = fs.readFileSync("revision");
+for (const pkg of packages) {
+  fs.mkdirSync(pkg + "/generated", {recursive:true});
+  fs.writeFileSync(pkg + "/ordinary.txt", "dependency");
+  fs.writeFileSync(pkg + "/generated/client.txt", revision);
+  fs.writeFileSync(pkg + "/generated/run", "#!/bin/sh\nprintf executable");
+  fs.chmodSync(pkg, 0o750);
+  fs.chmodSync(pkg + "/generated", 0o751);
+  fs.chmodSync(pkg + "/generated/run", 0o750);
+}
+fs.symlinkSync(".pnpm/client@1/node_modules/client", "node_modules/client");
+function normalize(path) {
+  if (fs.lstatSync(path).isDirectory())
+    for (const name of fs.readdirSync(path)) normalize(path + "/" + name);
+  fs.lutimesSync(path, 0, 0);
+}
+normalize(".");
+|}
+    );
+  write source "main.js"
+    ("const packages = " ^ packages
+   ^ {|;
+const fs = require("node:fs"), assert = require("node:assert/strict");
+const {execFileSync} = require("node:child_process");
+for (const pkg of packages) {
+  assert.equal(fs.readFileSync(pkg + "/ordinary.txt", "utf8"), "dependency");
+  assert.equal(fs.readFileSync(pkg + "/generated/client.txt", "utf8"), fs.readFileSync("revision", "utf8"));
+  assert.equal(fs.statSync(pkg).mode & 0o777, 0o750);
+  assert.equal(fs.statSync(pkg + "/generated").mode & 0o777, 0o751);
+  assert.equal(fs.statSync(pkg + "/generated/client.txt").uid, 10001);
+  assert.equal(execFileSync("./" + pkg + "/generated/run", {encoding:"utf8"}), "executable");
+}
+assert.equal(fs.readlinkSync("node_modules/client"), ".pnpm/client@1/node_modules/client");
+assert.equal(fs.readFileSync("node_modules/client/generated/client.txt", "utf8"), fs.readFileSync("revision", "utf8"));
+console.log("kiln smoke");
+|}
+    );
+  let layers =
+    List.map
+      (fun revision ->
+        write source "revision" revision;
+        let plan = prepare ~env binary source [] in
+        container ~rejected:false source plan)
+      [ "one"; "two" ]
+  in
+  match layers with
+  | [ before; after ] -> (
+      match (List.rev before, List.rev after) with
+      | source_before :: dependencies_before, source_after :: dependencies_after
+        ->
+          check "generated edits preserve dependency layers"
+            (source_before <> source_after
+            && dependencies_before = dependencies_after)
+      | _ -> failwith "expected image layers")
+  | _ -> assert false
 
 let exercise binary name =
   snapshot [] name (fun root ->
@@ -170,20 +242,25 @@ let exercise binary name =
       let env = environment [ ("PATH", empty) ] in
       if name = "node-npm" then cli_arguments ~env binary source;
       let plan = prepare ~env binary source [] in
-      container ~rejected:false source plan;
+      ignore (container ~rejected:false source plan);
       ignore (run "diff" [ "-r"; original; source ]);
       install_commands binary source name;
       let rejected = "test/rejected/" ^ name in
       if Sys.file_exists rejected then (
         copy rejected source;
-        container ~rejected:true source plan);
+        ignore (container ~rejected:true source plan));
       if name = "node-npm" then (
         configured_commands ~env binary source;
-        application_environment binary source))
+        application_environment binary source;
+        generated_layers ~env binary source))
 
 let () =
-  if Array.length Sys.argv <> 2 then
-    failwith "usage: integration CLI (from repository root)";
+  if Array.length Sys.argv < 2 then
+    failwith "usage: integration CLI [APP ...] (from repository root)";
   let binary = Unix.realpath Sys.argv.(1) in
-  List.iter (exercise binary) (entries "test/apps");
+  let apps =
+    if Array.length Sys.argv = 2 then entries "test/apps"
+    else Array.to_list (Array.sub Sys.argv 2 (Array.length Sys.argv - 2))
+  in
+  List.iter (exercise binary) apps;
   finish ()
