@@ -9,7 +9,8 @@ let prepare ?plan ~env binary source extra =
   ignore (run ~env binary ([ "prepare"; source ] @ options @ extra));
   plan
 
-let container ?(build_args = []) ?(env = Unix.environment ()) ~rejected source
+let container ?(build_args = []) ?(env = Unix.environment ())
+    ?(output = "type=docker") ?(expected_output = "kiln smoke") ~rejected source
     plan =
   let tag = "kiln-smoke:" ^ Filename.basename (Filename.dirname source) in
   let docker args = run "docker" args in
@@ -18,7 +19,7 @@ let container ?(build_args = []) ?(env = Unix.environment ()) ~rejected source
       try ignore (docker [ "image"; "rm"; "-f"; tag ])
       with Failure message -> prerr_endline message)
     (fun () ->
-      let build = [ "buildx"; "build"; "--load"; "-t"; tag ] in
+      let build = [ "buildx"; "build"; "--output"; output; "-t"; tag ] in
       ignore
         (run ~env
            ~exit_code:(if rejected then 1 else 0)
@@ -36,7 +37,7 @@ let container ?(build_args = []) ?(env = Unix.environment ()) ~rejected source
           | _ :: _ -> true);
         check "application output"
           (String.trim (docker [ "run"; "--rm"; "--network=none"; tag ])
-          = "kiln smoke");
+          = expected_output);
         docker [ "inspect"; "--format"; "{{json .RootFS.Layers}}"; tag ]
         |> Yojson.Basic.from_string |> Yojson.Basic.Util.to_list)
 
@@ -187,12 +188,6 @@ for (const pkg of packages) {
   fs.chmodSync(pkg + "/generated/run", 0o750);
 }
 fs.symlinkSync(".pnpm/client@1/node_modules/client", "node_modules/client");
-function normalize(path) {
-  if (fs.lstatSync(path).isDirectory())
-    for (const name of fs.readdirSync(path)) normalize(path + "/" + name);
-  fs.lutimesSync(path, 0, 0);
-}
-normalize(".");
 |}
     );
   Sys.remove (Filename.concat source "main.js");
@@ -211,15 +206,20 @@ for (const pkg of packages) {
 }
 assert.equal(fs.readlinkSync("node_modules/client"), ".pnpm/client@1/node_modules/client");
 assert.equal(fs.readFileSync("node_modules/client/generated/client.txt", "utf8"), fs.readFileSync("revision", "utf8"));
-console.log("kiln smoke");
+console.log("kiln smoke " + fs.readFileSync("revision", "utf8"));
 |}
     );
+  write source "revision" "one";
+  let plan = prepare ~env binary source [] in
   let layers =
     List.map
       (fun revision ->
         write source "revision" revision;
-        let plan = prepare ~env binary source [] in
-        container ~rejected:false source plan)
+        container
+          ~build_args:[ "--build-arg"; "SOURCE_DATE_EPOCH=0" ]
+          ~output:"type=docker,rewrite-timestamp=true"
+          ~expected_output:("kiln smoke " ^ revision) ~rejected:false source
+          plan)
       [ "one"; "two" ]
   in
   match layers with
