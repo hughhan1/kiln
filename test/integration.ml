@@ -227,7 +227,11 @@ console.log("kiln smoke");
       match (List.rev before, List.rev after) with
       | source_before :: dependencies_before, source_after :: dependencies_after
         ->
-          check "generated edits preserve dependency layers"
+          check
+            ("generated edits preserve dependency layers: "
+            ^ Yojson.Basic.to_string (`List before)
+            ^ " -> "
+            ^ Yojson.Basic.to_string (`List after))
             (source_before <> source_after
             && dependencies_before = dependencies_after)
       | _ -> failwith "expected image layers")
