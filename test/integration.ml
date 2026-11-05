@@ -195,6 +195,7 @@ function normalize(path) {
 normalize(".");
 |}
     );
+  Sys.remove (Filename.concat source "main.js");
   write source "main.js"
     ("const packages = " ^ packages
    ^ {|;
