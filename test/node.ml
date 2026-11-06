@@ -75,8 +75,46 @@ let () =
             && member "requestedVersion" package = `Null
             && member "source" package = `String source))
         [ ("node", "kiln default"); ("npm", "bundled with Node") ];
-      check "dependencies installed" (runs "npm install" plan);
+      let dockerfile = Build_plan.dockerfile plan.Planner.plan in
+      let position text =
+        match String.find_first ~sub:text dockerfile with
+        | Some index -> index
+        | None -> failwith ("missing: " ^ text)
+      in
+      check "dependencies install on the build platform for the target"
+        (position "FROM --platform=$BUILDPLATFORM"
+        < position {|--cpu=\"$cpu\" --libc=glibc --ignore-scripts|});
+      check "the emulated fallback and the source copy follow"
+        (position {|--ignore-scripts|} < position {|"kiln","npm","install"|}
+        && position {|"kiln","npm","install"|} < position {|COPY --exclude|});
+      check "the plan names the install path"
+        (`Assoc (Planner.info plan)
+        |> member "metadata" |> member "dependencyInstall"
+        = `String "native, emulated if a package has an install script");
       check "main startup" (startup plan = Some [ "node"; "main.js" ]));
+  List.iter
+    (fun (label, pkg) ->
+      snapshot label (fun root ->
+          write root "package.json" pkg;
+          let plan = result root [] in
+          check "installs on the target platform"
+            (not
+               (contains
+                  (Build_plan.dockerfile plan.Planner.plan)
+                  "$BUILDPLATFORM"));
+          check "the plan names the install path"
+            Yojson.Basic.Util.(
+              `Assoc (Planner.info plan)
+              |> member "metadata" |> member "dependencyInstall"
+              = `String "emulated")))
+    [
+      ( "root install script stays under emulation",
+        {|{"main":"main.js","scripts":{"postinstall":"true"}}|} );
+      ( "npm without --libc stays under emulation",
+        {|{"main":"main.js","packageManager":"npm@10.1.0"}|} );
+      ( "pnpm stays under emulation",
+        {|{"main":"main.js","packageManager":"pnpm@11.0.0"}|} );
+    ];
   snapshot "reuse and invalidation" (fun root ->
       let initial = result root [] in
       let reuse extras =

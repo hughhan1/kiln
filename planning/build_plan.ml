@@ -64,7 +64,7 @@ let image value =
 let image_ref image = image
 
 type stage = { base : base; operations : operation list }
-and base = Image of image | Stage of stage
+and base = Image of image | Native of image | Stage of stage
 and input = Context | Output of stage | External of image_reference
 and image_reference = string
 
@@ -123,7 +123,7 @@ let stages root =
     else
       let seen =
         match stage.base with
-        | Image _ -> seen
+        | Image _ | Native _ -> seen
         | Stage parent -> visit seen parent
       in
       let seen =
@@ -142,7 +142,9 @@ let stages root =
 
 let rec startup stage =
   let inherited () =
-    match stage.base with Image _ -> None | Stage parent -> startup parent
+    match stage.base with
+    | Image _ | Native _ -> None
+    | Stage parent -> startup parent
   in
   let rec local fallback = function
     | [] -> fallback ()
@@ -201,12 +203,16 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
         let base =
           match stage.base with
           | Image image -> image_ref image
+          | Native image -> "--platform=$BUILDPLATFORM " ^ image_ref image
           | Stage parent -> name parent
         in
         let operations = List.map operation stage.operations in
         let name = "s" ^ string_of_int (List.length !rendered) in
         rendered := (stage, name) :: !rendered;
         Buffer.add_string output ("FROM " ^ base ^ " AS " ^ name ^ "\n");
+        (match stage.base with
+        | Native _ -> Buffer.add_string output "ARG TARGETARCH\n"
+        | Image _ | Stage _ -> ());
         if not (Environment.Names.is_empty secrets) then
           Buffer.add_string output "ARG KILN_SECRETS_HASH\n";
         List.iter

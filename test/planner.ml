@@ -315,7 +315,7 @@ let () =
       let position line = Option.get (String.find_first ~sub:line recipe) in
       check "inherited install follows earlier commands"
         (position {|RUN ["/bin/sh","-c","echo before"]|}
-        < position {|RUN ["npm","install"]|}));
+        < position {|"kiln","npm","install"]|}));
   snapshot files "invalid configuration fails before discovery" (fun root ->
       let reject config =
         write root "railpack.json" config;

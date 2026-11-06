@@ -50,7 +50,7 @@ module type S = sig
   val packages : application -> resolution -> Package.t list
   (** Resolved versions together with the declarations that selected them. *)
 
-  val metadata : application -> (string * string) list
+  val metadata : application -> resolution -> (string * string) list
 
   val legacy :
     application ->

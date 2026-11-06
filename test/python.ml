@@ -47,14 +47,18 @@ let own_steps stage = List.filter_map step (Build_plan.operations stage)
 let rec inherited_steps stage =
   (match Build_plan.base stage with
     | Build_plan.Stage parent -> inherited_steps parent
-    | Build_plan.Image _ -> [])
+    | Build_plan.Image _ | Build_plan.Native _ -> [])
   @ own_steps stage
 
 let steps prepared =
   inherited_steps
     (List.find
        (fun stage -> List.mem "source" (own_steps stage))
-       (Build_plan.stages prepared.Planner.plan))
+       (List.rev (Build_plan.stages prepared.Planner.plan)))
+
+(* Steps of every stage, each after the stages it depends on. *)
+let all_steps prepared =
+  List.concat_map own_steps (Build_plan.stages prepared.Planner.plan)
 
 (* Whether the runtime copies the venv from a stage that copies the source. *)
 let venv_follows_source prepared =
@@ -263,23 +267,95 @@ let () =
       Unix.mkdir (Filename.concat root "requirements") 0o700;
       write root "requirements/base.txt" "--hash=sha256:abc\nflask>=3\n";
       let prepared = ok (prepare root []) in
-      let steps = steps prepared in
       check "the venv comes from the stage before the source copy"
         (not (venv_follows_source prepared));
-      check "environment, manifests, install, then source"
-        (ordered steps
+      check "environment, manifests, native install, fallback, then source"
+        (ordered (all_steps prepared)
            [
              "python -m venv";
              "manifest requirements.txt";
              "manifest requirements/base.txt";
-             "python -m pip install --no-cache-dir -r requirements.txt";
+             "/bin/sh -c case";
+             "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
              "source";
            ]);
       let dockerfile = Planner.dockerfile prepared in
+      check "the fallback installs the same requirements"
+        (contains dockerfile {|"kiln","-r","requirements.txt"|});
       check "manifests keep their own paths"
         (contains dockerfile {|COPY ["requirements.txt","./"]|}
         && contains dockerfile
              {|COPY ["requirements/base.txt","requirements/"]|}));
+  let pyproject dependency =
+    "[project]\nname='app'\ndynamic=['version']\ndependencies=['" ^ dependency
+    ^ "']\n\
+       [build-system]\n\
+       requires=['setuptools']\n\
+       build-backend='setuptools.build_meta'\n"
+  in
+  let project = pyproject "idna==3.10" in
+  let install_mode prepared =
+    Yojson.Basic.Util.(
+      `Assoc (Planner.info prepared)
+      |> member "metadata" |> member "dependencyInstall" |> to_string)
+  in
+  snapshot
+    [ ("pyproject.toml", project); ("main.py", "") ]
+    "pip project installs dependencies natively before the source"
+    (fun root ->
+      let prepared = ok (prepare root []) in
+      let dockerfile = Planner.dockerfile prepared in
+      check "the install stage runs on the build platform and targets the image"
+        (contains dockerfile "FROM --platform=$BUILDPLATFORM"
+        && contains dockerfile "ARG TARGETARCH"
+        && contains dockerfile {|--python-platform \"$arch-manylinux_2_40\"|}
+        && contains dockerfile {|"idna==3.10"]|});
+      check "the plan names the install path"
+        (String.starts_with ~prefix:"native" (install_mode prepared));
+      check "the project installs alone after the source copy"
+        (ordered (steps prepared)
+           [
+             "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
+             "source";
+             "/bin/sh -c set -e; [ ! -e /opt/kiln-project/.kiln-emulate ]";
+           ]);
+      check "the project builds natively too"
+        (contains dockerfile {|"--no-deps","--prefix=/opt/kiln-project","."|});
+      check "a source edit leaves the venv layer alone"
+        (not (venv_follows_source prepared));
+      check "the runtime overlays the project and compiles the standard library"
+        (contains dockerfile {|["/opt/kiln-project/","/opt/venv/"]|}
+        && contains dockerfile {|"compileall","-q","-j","0","/usr/local/lib"|});
+      write root "main.py" "print('edited')\n";
+      write root "pyproject.toml" (project ^ "[tool.ruff]\nline-length=100\n");
+      check "editing source or unrelated configuration keeps the plan"
+        (Planner.dockerfile (ok (prepare root [])) = dockerfile);
+      write root "pyproject.toml" (pyproject "idna==3.11");
+      check "a dependency bump changes the install"
+        (Planner.dockerfile (ok (prepare root [])) <> dockerfile));
+  snapshot
+    [ ("pyproject.toml", project); ("main.py", "") ]
+    "pip's own environment keeps the install with pip"
+    (fun root ->
+      let prepared =
+        ok
+          (prepare root
+             [
+               ( "environment",
+                 `Assoc [ ("PIP_INDEX_URL", `String "https://example.test") ] );
+             ])
+      in
+      check "stays on the target platform"
+        (not (contains (Planner.dockerfile prepared) "$BUILDPLATFORM"));
+      check "the plan names the install path"
+        (install_mode prepared = "emulated");
+      check "dependencies still precede the source"
+        (ordered (steps prepared)
+           [
+             "python -m pip install --no-cache-dir idna==3.10";
+             "source";
+             "/bin/sh -c python -m pip install --no-cache-dir --no-deps";
+           ]));
   List.iter
     (fun (label, files, fields) ->
       snapshot files label (fun root ->
@@ -295,13 +371,14 @@ let () =
       ( "local requirement keeps the whole source",
         [ ("requirements.txt", "./packages/local\n"); ("main.py", "") ],
         [] );
-      ( "project install keeps the whole source",
+      ( "dynamic dependencies keep the whole source",
         [
           ("requirements.txt", "idna==3.10\n");
           ( "pyproject.toml",
             "[project]\n\
              name='app'\n\
              version='1.0.0'\n\
+             dynamic=['dependencies']\n\
              [build-system]\n\
              requires=['setuptools']\n\
              build-backend='setuptools.build_meta'\n" );
@@ -415,37 +492,35 @@ let () =
         (fun root ->
           write root "railpack.json"
             ({|{"steps":{"install":{"commands":|} ^ commands ^ "}}}");
-          let steps =
-            steps
-              (ok
-                 (prepare root
-                    [
-                      ( "environment",
-                        `Assoc
-                          [ ("RAILPACK_INSTALL_CMD", `String "echo ignored") ]
-                      );
-                    ]))
+          let prepared =
+            ok
+              (prepare root
+                 [
+                   ( "environment",
+                     `Assoc [ ("RAILPACK_INSTALL_CMD", `String "echo ignored") ]
+                   );
+                 ])
           in
+          let steps = steps prepared in
           check "configured commands take their place" (ordered steps expected);
           check "configuration replaces the install command"
             (not (List.mem "/bin/sh -c echo ignored" steps));
           check "inheritance selects the dependency layout"
-            (List.exists (String.starts_with ~prefix:"manifest") steps
+            (List.exists
+               (String.starts_with ~prefix:"manifest")
+               (all_steps prepared)
             = manifests)))
     [
       ( {|["python -c 'print(1)'", "..."]|},
         [
-          "python -m venv";
           "/bin/sh -c python -c 'print(1)'";
-          "manifest requirements.txt";
-          "python -m pip install";
+          "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
           "source";
         ],
         true );
       ( {|["...", "python -c 'print(1)'"]|},
         [
-          "manifest requirements.txt";
-          "python -m pip install";
+          "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
           "/bin/sh -c python -c 'print(1)'";
           "source";
         ],

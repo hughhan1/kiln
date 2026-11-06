@@ -518,6 +518,27 @@ let id = "node"
 let public_name = id
 let exclude = [ "node_modules" ]
 
+(* npm honours --libc from 10.4. A replaced install command always copies the
+   whole source, and pnpm has no equivalent flags. *)
+let native app r =
+  match (app.inputs, r.pm) with
+  | Manifests _, Npm ->
+      Semver.compare r.pm_version (Result.get_ok (parse_version "10.4.0")) >= 0
+  | Manifests _, Pnpm | Whole_source, _ -> false
+
+(* An install script may compile for the platform it runs on, so a package set
+   with one installs under emulation. *)
+let native_npm =
+  {|case "$TARGETARCH" in amd64) cpu=x64 ;; arm64) cpu=arm64 ;; esac
+if npm install --os=linux --cpu="$cpu" --libc=glibc --ignore-scripts \
+  && ! grep -qs '"hasInstallScript": true' node_modules/.package-lock.json; then
+  echo "kiln: installed Node dependencies natively for $TARGETARCH"
+else
+  echo "kiln: no native Node install for $TARGETARCH; installing under emulation"
+  rm -rf node_modules
+  touch .kiln-emulate
+fi|}
+
 let plan app r =
   let open Build_plan in
   let pm = name r.pm in
@@ -540,34 +561,54 @@ let plan app r =
     environment
       [ ("NODE_ENV", "production"); ("HOME", "/tmp"); ("PORT", "8080") ]
   in
-  let* toolchain =
-    stage (Image r.builder)
+  let toolchain base =
+    stage base
       ([ Workdir "/app"; Env ci_env ]
       @ manager_env
       @ List.map (fun command -> Run command) (Option.to_list r.manager_install)
       )
   in
+  let* builder = toolchain (Image r.builder) in
   let copy_source = Source.copy ~exclude [ "." ] "." in
   let install = Run app.install in
-  let* build =
-    stage (Stage toolchain)
-      ((match app.inputs with
-         | Whole_source -> copy_source :: app.install_commands [ install ]
-         | Manifests paths ->
-             app.install_commands (Source.manifests paths @ [ install ])
-             @ [ copy_source ])
-      @ app.build)
+  let* steps =
+    match app.inputs with
+    | Whole_source -> Ok (copy_source :: app.install_commands [ install ])
+    | Manifests paths when native app r ->
+        let* base = toolchain (Native r.builder) in
+        let* native_install = argv [ "/bin/sh"; "-c"; native_npm ] in
+        let* installed =
+          stage (Stage base) (Source.manifests paths @ [ Run native_install ])
+        in
+        let+ emulated =
+          argv
+            ([
+               "/bin/sh";
+               "-c";
+               {|[ ! -e .kiln-emulate ] || { rm .kiln-emulate && "$@"; }|};
+               "kiln";
+             ]
+            @ arguments app.install)
+        in
+        app.install_commands
+          [ copy installed [ "/app/" ] "/app/"; Run emulated ]
+        @ [ copy_source ]
+    | Manifests paths ->
+        Ok
+          (app.install_commands (Source.manifests paths @ [ install ])
+          @ [ copy_source ])
   in
+  let* build = stage (Stage builder) (steps @ app.build) in
   stage (Image r.runtime)
     ([ Workdir "/app"; Env runtime_env ]
     @ manager_env
     @ Option.fold ~none:[]
         ~some:(fun _ ->
           [
-            copy toolchain
+            copy builder
               [ "/usr/local/lib/node_modules/" ^ pm ^ "/" ]
               ("/usr/local/lib/node_modules/" ^ pm ^ "/");
-            copy toolchain [ "/usr/local/bin/" ] "/usr/local/bin/";
+            copy builder [ "/usr/local/bin/" ] "/usr/local/bin/";
           ])
         r.manager_install
     @ [
@@ -635,5 +676,11 @@ let packages app r =
       (name r.pm) app.manager_declarations (Semver.show r.pm_version);
   ]
 
-let metadata app =
-  [ ("nodeRuntime", "node"); ("nodePackageManager", name app.manager) ]
+let metadata app r =
+  [
+    ( "dependencyInstall",
+      if native app r then "native, emulated if a package has an install script"
+      else "emulated" );
+    ("nodeRuntime", "node");
+    ("nodePackageManager", name app.manager);
+  ]

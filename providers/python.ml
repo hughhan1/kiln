@@ -8,12 +8,14 @@ module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
 module Support = Kiln_planning.Support
 open Result.Syntax
+module Environment = Kiln_planning.Environment
 module Error = Kiln_core.Error
 module Version = Python_version
 module Toml = Python_toml
 
 let id = "python"
 let public_name = id
+let uv_tool_version = "0.13.1"
 
 let exclude =
   [
@@ -44,7 +46,11 @@ let detect source =
      else Provider.No_match)
 
 type install =
-  | Pip_install of { requirements : bool; project : bool }
+  | Pip_install of {
+      requirements : bool;
+      project : bool;
+      dependencies : string list;
+    }
   | Uv_install of Version.requirement list
   | Manager_install of { manager : manager; lock : bool; install_root : bool }
 
@@ -62,6 +68,7 @@ type application = {
   fingerprint : string;
   install : install;
   inputs : inputs;
+  native : string list option;
   installable : bool;
   start : Build_plan.argv option;
   build : Build_plan.operation list;
@@ -84,6 +91,9 @@ type resolution = {
   runtime : Build_plan.image;
   installer : installer;
 }
+
+let pip_arguments ~requirements ~dependencies =
+  (if requirements then [ "-r"; "requirements.txt" ] else []) @ dependencies
 
 let project source path =
   let* document = Toml.read source path in
@@ -262,16 +272,19 @@ let uv_declarations request source root =
   in
   Ok (declarations, parse)
 
-let install_inputs source install ~requirements ~project ~lock ~uv_local =
+let install_inputs source install ~requirements ~project ~lock ~uv_local
+    ~static_dependencies =
   let present = List.filter (Source.has source) in
   let manifests local paths =
     if local || source.Source.links then Whole_source
     else Manifests (List.sort_uniq String.compare paths)
   in
   match install with
-  | Pip_install { project = true; _ }
-  | Manager_install { install_root = true; _ } ->
-      Whole_source
+  | Manager_install { install_root = true; _ } -> Whole_source
+  | Pip_install { project = true; _ } ->
+      manifests
+        (project || requirements.Python_sources.local || not static_dependencies)
+        requirements.Python_sources.included
   | Pip_install { project = false; _ } ->
       manifests requirements.Python_sources.local
         requirements.Python_sources.included
@@ -383,6 +396,7 @@ let load request source =
         let+ _, declarations, version = manager_declarations request manager in
         (declarations, Some (manager, version))
   in
+  let* dependencies = Toml.strings root [ "project"; "dependencies" ] in
   let* install =
     match (manager, lock) with
     | Some manager, _ ->
@@ -410,6 +424,7 @@ let load request source =
              {
                requirements = Source.has source "requirements.txt";
                project = installable;
+               dependencies;
              })
     | None, Some _ ->
         if not (Source.has source "pyproject.toml") then
@@ -433,6 +448,7 @@ let load request source =
   in
   (* uv builds the root project to read dynamic metadata. *)
   let* dynamic = Toml.field root [ "project"; "dynamic" ] Otoml.get_value in
+  let* dynamic_fields = Toml.strings root [ "project"; "dynamic" ] in
   let inputs =
     if Request.replaces_install request then Whole_source
     else
@@ -440,6 +456,23 @@ let load request source =
         ~project:root_local
         ~lock:(uv_lock_local || manager_lock_local)
         ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
+        ~static_dependencies:
+          (Option.is_some name && not (List.mem "dependencies" dynamic_fields))
+  in
+  (* uv ignores pip's environment, so an index set through PIP_* stays with pip. *)
+  let pip_index =
+    List.exists
+      (String.starts_with ~prefix:"PIP_")
+      (Environment.Names.elements request.Request.secrets)
+  in
+  let native =
+    match (install, inputs) with
+    | Pip_install { requirements; dependencies; _ }, Manifests _
+      when (requirements || dependencies <> []) && not pip_index ->
+        Some (pip_arguments ~requirements ~dependencies)
+    | ( (Pip_install _ | Uv_install _ | Manager_install _),
+        (Whole_source | Manifests _) ) ->
+        None
   in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
@@ -496,6 +529,7 @@ let load request source =
       fingerprint;
       install;
       inputs;
+      native;
       installable;
       start;
       install_override = request.Request.install;
@@ -660,6 +694,42 @@ let uv_sync options =
   @ options
   @ [ "--python"; "/usr/local/bin/python"; "--no-managed-python" ]
 
+(* The target's own architecture appears in every platform wheel uv selects;
+   anything else in a tag came from building a source distribution here, so
+   [reset] clears the way for an install under emulation. *)
+let native_uv python ~what ~root ~reset arguments =
+  Build_plan.argv
+    ([
+       "/bin/sh";
+       "-c";
+       {|case "$TARGETARCH" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; esac
+if /opt/kiln-tools/bin/uv pip install --python /opt/venv/bin/python --python-platform "$arch-manylinux_2_40" --python-version "$0" --compile-bytecode "$@" \
+  && ! grep -hs '^Tag:' |}
+       ^ root
+       ^ {|/lib/*/site-packages/*.dist-info/WHEEL | grep -qv -e '-any$' -e "$arch"; then
+  echo "kiln: installed Python |}
+       ^ what
+       ^ {| natively for $TARGETARCH"
+else
+  echo "kiln: no native Python install of |}
+       ^ what ^ {| for $TARGETARCH; installing under emulation"
+  rm -rf |}
+       ^ root ^ "\n  " ^ reset ^ "\n  touch " ^ root ^ "/.kiln-emulate\nfi";
+       Version.show python;
+     ]
+    @ arguments)
+
+let emulated_install =
+  {|[ ! -e /opt/venv/.kiln-emulate ] || { rm /opt/venv/.kiln-emulate && python -m pip install --no-cache-dir "$@"; }|}
+
+let pip_project =
+  "python -m pip install --no-cache-dir --no-deps --prefix=/opt/kiln-project ."
+
+let overlay_project = "cp -R /opt/kiln-project/. /opt/venv/"
+
+let compile_venv =
+  Build_plan.shell "python -m compileall -qq -j 0 /opt/venv || true"
+
 let plan app resolved =
   let open Build_plan in
   let* setup, defaults, manager_environment =
@@ -668,10 +738,22 @@ let plan app resolved =
         let pip args =
           [ "python"; "-m"; "pip"; "install"; "--no-cache-dir" ] @ args
         in
+        let requirements =
+          if install.requirements then
+            [ pip (pip_arguments ~requirements:true ~dependencies:[]) ]
+          else []
+        in
         let defaults =
-          (if install.requirements then [ pip [ "-r"; "requirements.txt" ] ]
-           else [])
-          @ if install.project then [ pip [ "." ] ] else []
+          match app.inputs with
+          | Whole_source ->
+              requirements @ if install.project then [ pip [ "." ] ] else []
+          | Manifests _ when install.dependencies = [] -> requirements
+          | Manifests _ ->
+              [
+                pip
+                  (pip_arguments ~requirements:install.requirements
+                     ~dependencies:install.dependencies);
+              ]
         in
         Ok ([], defaults, [])
     | Uv_install _, Uv uv ->
@@ -718,12 +800,23 @@ let plan app resolved =
     | Some argv -> Ok [ Run argv ]
     | None -> Support.traverse run defaults
   in
+  (* pip compiles what it installs; uv and the package managers do not. *)
+  let* compile =
+    match app.install with
+    | Pip_install _ -> Ok []
+    | Uv_install _ | Manager_install _ ->
+        let+ compile = compile_venv in
+        [ Run compile ]
+  in
   (* Dependencies installed from manifests leave the project itself for after the source copy. *)
   let* finish =
     match (app.install, app.inputs) with
     | Uv_install _, Manifests _ when app.installable ->
         let+ sync = run (uv_sync [ "--no-editable" ]) in
         [ sync ]
+    | Pip_install { project = true; _ }, Manifests _ ->
+        let+ install = shell (pip_project ^ " && " ^ overlay_project) in
+        [ Run install ]
     | ( (Pip_install _ | Uv_install _ | Manager_install _),
         (Whole_source | Manifests _) ) ->
         Ok []
@@ -751,41 +844,134 @@ let plan app resolved =
      Manifest-first builds install into a dependency stage that ends before the
      source copy, so a source edit leaves that stage's snapshot, and the venv
      copied from it, unchanged. *)
-  let* dependencies, build =
+  let* dependencies, build, finish =
     match app.inputs with
     | Whole_source ->
         let+ builder =
           stage (Image resolved.builder)
             ([ Workdir "/app"; Env env; venv ]
-            @ (copy_source :: app.install_commands (setup @ commands))
+            @ (copy_source :: app.install_commands (setup @ commands @ compile))
             @ app.build)
         in
-        (builder, builder)
+        (builder, builder, finish)
     | Manifests paths ->
+        let* install, finish =
+          match app.native with
+          | Some arguments ->
+              let* tools =
+                Support.traverse run
+                  [
+                    [ "python"; "-m"; "venv"; "/opt/kiln-tools" ];
+                    [
+                      "/opt/kiln-tools/bin/pip";
+                      "install";
+                      "--no-cache-dir";
+                      "uv==" ^ uv_tool_version;
+                    ];
+                  ]
+              in
+              let* base =
+                stage (Native resolved.builder)
+                  ([ Workdir "/app"; Env env; venv ] @ tools)
+              in
+              let* native =
+                native_uv resolved.python ~what:"dependencies" ~root:"/opt/venv"
+                  ~reset:"/usr/local/bin/python -m venv /opt/venv" arguments
+              in
+              let* installed =
+                stage (Stage base) (Source.manifests paths @ [ Run native ])
+              in
+              let* emulated =
+                argv ([ "/bin/sh"; "-c"; emulated_install; "kiln" ] @ arguments)
+              in
+              let+ finish =
+                match finish with
+                | [] -> Ok []
+                | _ :: _ ->
+                    let* native =
+                      native_uv resolved.python ~what:"project"
+                        ~root:"/opt/kiln-project"
+                        ~reset:"mkdir /opt/kiln-project"
+                        [ "--no-deps"; "--prefix=/opt/kiln-project"; "." ]
+                    in
+                    let* built =
+                      stage (Stage base) [ copy_source; Run native ]
+                    in
+                    let+ overlay =
+                      shell
+                        ("set -e; [ ! -e /opt/kiln-project/.kiln-emulate ] || \
+                          { rm /opt/kiln-project/.kiln-emulate; " ^ pip_project
+                       ^ "; }; " ^ overlay_project)
+                    in
+                    [
+                      copy built [ "/opt/kiln-project/" ] "/opt/kiln-project/";
+                      Run overlay;
+                    ]
+              in
+              ( [ copy base [ "/opt/venv/" ] "/opt/venv/" ]
+                @ app.install_commands
+                    [
+                      copy installed [ "/opt/venv/" ] "/opt/venv/";
+                      copy installed [ "/app/" ] "/app/";
+                      Run emulated;
+                    ],
+                finish )
+          | None ->
+              Ok
+                ( venv
+                  :: app.install_commands
+                       (Source.manifests paths @ setup @ commands @ compile),
+                  finish )
+        in
         let* dependencies =
-          stage (Image resolved.builder)
-            ([ Workdir "/app"; Env env; venv ]
-            @ app.install_commands (Source.manifests paths @ setup @ commands))
+          stage (Image resolved.builder) ([ Workdir "/app"; Env env ] @ install)
         in
         let+ build =
           stage (Stage dependencies) ((copy_source :: finish) @ app.build)
         in
-        (dependencies, build)
+        (dependencies, build, finish)
   in
-  (* Build commands do not change the venv of a manifest-first image; a uv
-     packaged project installs itself after the source copy, so its venv comes
-     from the build stage. *)
-  let venv_source = if finish = [] then dependencies else build in
+  (* Build commands do not change the venv of a manifest-first image. A project
+     installs itself after the source copy: a pip project to a prefix, whose few
+     files overlay the venv so a source edit leaves the venv layer unchanged, and
+     a uv packaged project into the venv, which then comes from the build stage. *)
+  let venv_source, project =
+    match (app.install, finish) with
+    | Pip_install _, _ :: _ ->
+        ( dependencies,
+          [
+            copy ~owner:(1000, 1000) build [ "/opt/kiln-project/" ] "/opt/venv/";
+          ] )
+    | (Pip_install _ | Uv_install _ | Manager_install _), [] ->
+        (dependencies, [])
+    | (Uv_install _ | Manager_install _), _ :: _ -> (build, [])
+  in
+  let* compile_stdlib =
+    run
+      [
+        "/usr/local/bin/python";
+        "-m";
+        "compileall";
+        "-q";
+        "-j";
+        "0";
+        "/usr/local/lib";
+      ]
+  in
   stage (Image resolved.runtime)
-    [
-      Workdir "/app";
-      Env env;
-      copy ~owner:(1000, 1000) venv_source [ "/opt/venv/" ] "/opt/venv/";
-      copy ~owner:(1000, 1000) build [ "/app/" ] "/app/";
-      User (1000, 1000);
-      Entrypoint None;
-      Start app.start;
-    ]
+    ([
+       Workdir "/app";
+       Env env;
+       compile_stdlib;
+       copy ~owner:(1000, 1000) venv_source [ "/opt/venv/" ] "/opt/venv/";
+     ]
+    @ project
+    @ [
+        copy ~owner:(1000, 1000) build [ "/app/" ] "/app/";
+        User (1000, 1000);
+        Entrypoint None;
+        Start app.start;
+      ])
 
 let packages app r =
   Package.resolve "python" app.python_declarations (Version.show r.python)
@@ -805,8 +991,12 @@ let packages app r =
           (Version.show tool.tool_version);
       ])
 
-let metadata app =
+let metadata app _ =
   [
+    ( "dependencyInstall",
+      if Option.is_some app.native then
+        "native, emulated if a package has no target wheel"
+      else "emulated" );
     ("pythonRuntime", "cpython");
     ( "pythonPackageManager",
       match app.install with

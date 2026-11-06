@@ -236,4 +236,4 @@ let plan app resolved =
     ]
 
 let packages app r = [ Semver_image.package id app.requirements r ]
-let metadata _ = []
+let metadata _ _ = []

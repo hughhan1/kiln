@@ -70,7 +70,7 @@ let prepare { Provider.provider = (module P); detected } ~today ~fetch
     secrets = request.Request.secrets;
     detected;
     packages = P.packages app resolved;
-    metadata = P.metadata app;
+    metadata = P.metadata app resolved;
     resolution =
       `Assoc
         [

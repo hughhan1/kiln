@@ -155,7 +155,7 @@ let legacy _ _ = Error Error.Invalid_resolution
 let packages app resolved =
   [ Semver_image.package id app.requirements resolved.compiler ]
 
-let metadata _ = []
+let metadata _ _ = []
 
 let plan app resolved =
   let open Build_plan in

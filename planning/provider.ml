@@ -24,7 +24,7 @@ module type S = sig
   val decode : Yojson.Basic.t -> (resolution, Error.t) result
   val encode : resolution -> Yojson.Basic.t
   val packages : application -> resolution -> Package.t list
-  val metadata : application -> (string * string) list
+  val metadata : application -> resolution -> (string * string) list
 
   val legacy :
     application -> Yojson.Basic.t -> (resolution option, Error.t) result
