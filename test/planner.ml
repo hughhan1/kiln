@@ -338,6 +338,19 @@ let () =
         [ "--error-missing-start" ],
         "no startup" );
     ];
+  List.iter
+    (fun (provider, files, ignored) ->
+      snapshot files (provider ^ " ignores node_modules") (fun root ->
+          Unix.mkdir (Filename.concat root "node_modules") 0o700;
+          write root ("node_modules/" ^ ignored) "[";
+          check "it stays out of planning and the build context"
+            (contains
+               (Planner.dockerfile (ok (prepare root [])))
+               "--exclude=node_modules")))
+    [
+      ("Python", [ ("main.py", "") ], "pyproject.toml");
+      ("Go", [ ("go.mod", "module example\ngo 1.27\n") ], "go.work");
+    ];
   snapshot files "contained custom configuration" (fun root ->
       Unix.mkdir (Filename.concat root "config") 0o700;
       write root "config/build.json"

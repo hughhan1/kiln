@@ -16,6 +16,7 @@ let uv_tool_version = "0.13.1"
 
 let exclude =
   [
+    "node_modules";
     ".venv";
     "venv";
     "__pycache__";
