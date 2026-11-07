@@ -21,11 +21,15 @@ registry() {
     "https://registry-1.docker.io/v2/$1/$2"
 }
 
-# The digest-pinned reference of a tag that every Kiln target can pull.
+# The digest-pinned reference of a tag that every Kiln target can pull. A tag
+# without both platforms returns 2, and its release is left out.
 image() {
   registry "$1" "manifests/$2" > "$stage/index" || die "cannot fetch $1:$2"
-  jq -e '[.manifests[].platform | .os + "/" + .architecture] | contains(["linux/amd64", "linux/arm64"])' \
-    "$stage/index" > /dev/null || die "$1:$2 lacks linux/amd64 or linux/arm64"
+  if ! jq -e '[.manifests[].platform | .os + "/" + .architecture] | contains(["linux/amd64", "linux/arm64"])' \
+    "$stage/index" > /dev/null; then
+    echo "bump-pins: skipping $1:$2, which lacks linux/amd64 or linux/arm64" >&2
+    return 2
+  fi
   echo "docker.io/$1@sha256:$(sha256sum "$stage/index" | cut -d' ' -f1)"
 }
 
@@ -34,6 +38,23 @@ newest_minors() {
   jq -Rrn --argjson count "$1" '
     [inputs | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) | split(".") | map(tonumber)]
     | group_by(.[:2]) | map(max) | .[-$count:][] | map(tostring) | join(".")'
+}
+
+# Reads tags. Prints each stable release, oldest first, with whether to refresh
+# it: every patch of a minor from $1 on and the newest patch of an older one,
+# refreshing only the newest patch of the $2 newest minors.
+patches() {
+  jq -Rrn --argjson from "$1" --argjson fresh "$2" '
+    [inputs | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) | split(".") | map(tonumber)]
+    | group_by(.[:2]) | length as $lines | to_entries[]
+    | (.key >= $lines - $fresh) as $live | .value | sort | to_entries as $patches | $patches[]
+    | (.key == ($patches | length) - 1) as $newest | select($newest or .value[1] >= $from)
+    | [(.value | map(tostring) | join(".")), ($newest and $live)] | @tsv'
+}
+
+# The pinned row starting with $1, unless $2 asks for a refresh.
+kept() {
+  [ "$2" = false ] && grep -m 1 -F "$1" providers/pins.ml
 }
 
 # Wraps the rows on stdin in a named list.
@@ -49,16 +70,34 @@ table() {
 # runtime tag suffixes $3 and $4.
 toolchain() {
   local builder runtime
-  builder=$(image "$1" "$2$3")
-  runtime=$(image "$1" "$2$4")
+  builder=$(image "$1" "$2$3") || return
+  runtime=$(image "$1" "$2$4") || return
   printf '{ release = "%s"; builder = "%s"; runtime = "%s" }' "$2" "$builder" "$runtime"
 }
 
 image_rows() {
   local version pinned
   registry "$1" tags/list | jq -r '.tags[]' | newest_minors "$2" | while read -r version; do
-    pinned=$(image "$1" "$version")
-    echo "    { version = \"$version\"; image = \"$pinned\" };"
+    if pinned=$(image "$1" "$version"); then
+      echo "    { version = \"$version\"; image = \"$pinned\" };"
+    else
+      [ $? = 2 ] || exit 1
+    fi
+  done
+}
+
+# Go 1.21 added exact toolchains to go.mod; an older module selects the newest
+# patch of its minor.
+go_rows() {
+  local version refresh row pinned
+  registry library/golang tags/list | jq -r '.tags[]' | patches 21 3 | while IFS=$'\t' read -r version refresh; do
+    if row=$(kept "    { version = \"$version\"; image = \"docker.io/library/golang@" "$refresh"); then
+      echo "$row"
+    elif pinned=$(image library/golang "$version"); then
+      echo "    { version = \"$version\"; image = \"$pinned\" };"
+    else
+      [ $? = 2 ] || exit 1
+    fi
   done
 }
 
@@ -72,39 +111,45 @@ manager_rows() {
     | "    { tool = \"\(.key)\"; engines = \"\(.engines)\" };"'
 }
 
-# Every Node major inside its support window today, oldest first.
+# Every release with images in each Node major inside its support window today,
+# oldest first, refreshing the newest of each.
 node_rows() {
-  local version npm lts
+  local version npm lts refresh row
   fetch https://raw.githubusercontent.com/nodejs/Release/main/schedule.json > "$stage/schedule"
-  fetch https://nodejs.org/dist/index.json | jq -r --arg today "$(date -u +%F)" --slurpfile schedule "$stage/schedule" '
+  registry library/node tags/list | jq '[.tags[] | {(.): true}] | add' > "$stage/tags"
+  fetch https://nodejs.org/dist/index.json | jq -r --arg today "$(date -u +%F)" \
+    --slurpfile schedule "$stage/schedule" --slurpfile tags "$stage/tags" '
     ($schedule[0] | to_entries | map(select(.value.start <= $today and $today < .value.end) | .key)) as $majors
-    | [.[] | . + {major: (.version | split(".")[0])} | select(.major | IN($majors[]))]
-    | group_by(.major | ltrimstr("v") | tonumber)[] | .[0]
-    | [(.version | ltrimstr("v")), .npm, (.lts | if . then "Some \"\(ascii_downcase)\"" else "None" end)] | @tsv' |
-    while IFS=$'\t' read -r version npm lts; do
-      printf '    { node = '
-      toolchain library/node "$version" -bookworm -bookworm-slim
-      printf '; npm = "%s"; lts = %s };\n' "$npm" "$lts"
+    | [.[] | (.version | ltrimstr("v")) as $v
+       | select((.version | split(".")[0] | IN($majors[])) and $tags[0][$v + "-bookworm"] and $tags[0][$v + "-bookworm-slim"])
+       | . + {v: $v, parts: ($v | split(".") | map(tonumber))}]
+    | group_by(.parts[0])[] | sort_by(.parts) | to_entries as $releases | $releases[]
+    | (.key == ($releases | length) - 1) as $refresh | .value
+    | [.v, .npm, (.lts | if . then "Some \"\(ascii_downcase)\"" else "None" end), $refresh] | @tsv' |
+    while IFS=$'\t' read -r version npm lts refresh; do
+      if row=$(kept "    { node = { release = \"$version\";" "$refresh"); then
+        echo "$row"
+      elif row=$(toolchain library/node "$version" -bookworm -bookworm-slim); then
+        echo "    { node = $row; npm = \"$npm\"; lts = $lts };"
+      else
+        [ $? = 2 ] || exit 1
+      fi
     done
 }
 
 # Every stable release, oldest first, so an exact declaration always finds its
-# pin. Only the newest patch of a minor is refreshed; an older one keeps its
-# digest, so it costs no requests once pinned.
+# pin. Only the newest patch of each supported minor is refreshed; an older one
+# keeps its digest, so it costs no requests once pinned.
 python_rows() {
-  local version newest row
-  registry library/python tags/list | jq -r '.tags[]' | sed -n 's/-trixie$//p' | jq -Rrn '
-    [inputs | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) | split(".") | map(tonumber)]
-    | group_by(.[:2])[] | sort | to_entries as $patches | $patches[]
-    | [(.value | map(tostring) | join(".")), .key == ($patches | length) - 1] | @tsv' |
-    while IFS=$'\t' read -r version newest; do
-      row=$(grep -F "    { release = \"$version\";" providers/pins.ml || true)
-      if [ "$newest" = false ] && [ -n "$row" ]; then
+  local version refresh row
+  registry library/python tags/list | jq -r '.tags[]' | sed -n 's/-trixie$//p' | patches 0 5 |
+    while IFS=$'\t' read -r version refresh; do
+      if row=$(kept "    { release = \"$version\";" "$refresh"); then
         echo "$row"
+      elif row=$(toolchain library/python "$version" -trixie -slim-trixie); then
+        echo "    $row;"
       else
-        printf '    '
-        toolchain library/python "$version" -trixie -slim-trixie
-        echo ';'
+        [ $? = 2 ] || exit 1
       fi
     done
 }
@@ -120,7 +165,7 @@ python_rows() {
   image_rows astral/uv 3 | table uv
   image_rows oven/bun 3 | table bun
   image_rows denoland/deno 3 | table deno
-  image_rows library/golang 3 | table golang
+  go_rows | table golang
   debian=$(image library/debian bookworm-slim)
   echo "let debian = \"$debian\""
 } > "$stage/pins.ml"

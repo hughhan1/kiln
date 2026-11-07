@@ -8,7 +8,8 @@ type node = { node : toolchain; npm : string; lts : string option }
 type tool = { tool : string; engines : string }
 
 val node : node list
-(** Node releases in their support window, one per major, with bundled npm. *)
+(** Every Node release with images in a major inside its support window, with
+    its bundled npm. *)
 
 val npm : tool list
 (** npm releases, with the Node range each supports. *)
@@ -22,7 +23,9 @@ val python : toolchain list
 val uv : image list
 val bun : image list
 val deno : image list
+
 val golang : image list
+(** Every Go release from 1.21, and the newest patch of each older minor. *)
 
 val debian : string
 (** Debian bookworm-slim, the runtime for Go binaries. *)

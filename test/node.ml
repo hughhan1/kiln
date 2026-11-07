@@ -18,6 +18,11 @@ let default_pin =
 let oldest_pin = List.hd Pins.node
 let major version = List.hd (String.split_on_char '.' version)
 
+(* What a declaration of the oldest pinned major resolves to. *)
+let oldest_major =
+  let line = major (release oldest_pin) in
+  last (List.filter (fun pin -> major (release pin) = line) Pins.node)
+
 let selected field response =
   Yojson.Basic.Util.(
     response.Planner.resolution |> member "data" |> member field |> to_string)
@@ -112,10 +117,10 @@ let () =
   snapshot "a major selects its pin and images" (fun root ->
       write root ".nvmrc" (major (release oldest_pin));
       let plan = result root [] in
-      check "pin" (uses_node (release oldest_pin) plan);
+      check "pin" (uses_node (release oldest_major) plan);
       check "images"
-        (selected "builderImage" plan = oldest_pin.Pins.node.Pins.builder
-        && selected "runtimeImage" plan = oldest_pin.Pins.node.Pins.runtime));
+        (selected "builderImage" plan = oldest_major.Pins.node.Pins.builder
+        && selected "runtimeImage" plan = oldest_major.Pins.node.Pins.runtime));
   (let npm = (List.hd Pins.npm).Pins.tool in
    snapshot "devEngines select the runtime and a pinned manager" (fun root ->
        write root "package.json"
@@ -124,7 +129,7 @@ let () =
             (major (release oldest_pin))
             (major npm));
        let plan = result root [] in
-       check "runtime" (uses_node (release oldest_pin) plan);
+       check "runtime" (uses_node (release oldest_major) plan);
        check "manager"
          (selected "packageManager" plan = "npm"
          && selected "packageManagerVersion" plan = npm)));
