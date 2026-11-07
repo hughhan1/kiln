@@ -88,13 +88,25 @@ node_rows() {
     done
 }
 
+# Every stable release, oldest first, so an exact declaration always finds its
+# pin. Only the newest patch of a minor is refreshed; an older one keeps its
+# digest, so it costs no requests once pinned.
 python_rows() {
-  local version
-  registry library/python tags/list | jq -r '.tags[]' | sed -n 's/-trixie$//p' | newest_minors 5 | while read -r version; do
-    printf '    '
-    toolchain library/python "$version" -trixie -slim-trixie
-    echo ';'
-  done
+  local version newest row
+  registry library/python tags/list | jq -r '.tags[]' | sed -n 's/-trixie$//p' | jq -Rrn '
+    [inputs | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) | split(".") | map(tonumber)]
+    | group_by(.[:2])[] | sort | to_entries as $patches | $patches[]
+    | [(.value | map(tostring) | join(".")), .key == ($patches | length) - 1] | @tsv' |
+    while IFS=$'\t' read -r version newest; do
+      row=$(grep -F "    { release = \"$version\";" providers/pins.ml || true)
+      if [ "$newest" = false ] && [ -n "$row" ]; then
+        echo "$row"
+      else
+        printf '    '
+        toolchain library/python "$version" -trixie -slim-trixie
+        echo ';'
+      fi
+    done
 }
 
 {

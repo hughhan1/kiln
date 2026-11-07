@@ -17,7 +17,7 @@ val pnpm : tool list
 (** pnpm releases, with the Node range each supports. *)
 
 val python : toolchain list
-(** Python releases, one per minor, on Debian trixie. *)
+(** Every stable Python release on Debian trixie. *)
 
 val uv : image list
 val bun : image list

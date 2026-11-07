@@ -8,12 +8,6 @@ let oldest_python = (List.hd Pins.python).Pins.release
 let newest_python = (last Pins.python).Pins.release
 let oldest_uv = (List.hd Pins.uv).Pins.version
 
-(* A pinned release's minor line, such as 3.13 for 3.13.7. *)
-let minor release =
-  match String.split_on_char '.' release with
-  | major :: minor :: _ -> major ^ "." ^ minor
-  | [] | [ _ ] -> failwith ("expected a release: " ^ release)
-
 (* Builder steps as text: context copies and RUN argv. *)
 let step = function
   | Build_plan.Copy { input = Build_plan.Context; paths = [ "." ]; _ } ->
@@ -95,9 +89,9 @@ let () =
   snapshot
     [
       ("main.py", "print('hello')");
-      (".python-version", minor oldest_python);
+      (".python-version", oldest_python);
       ( "pyproject.toml",
-        "[project]\nrequires-python = '>=3.11,!=" ^ newest_python ^ "'\n" );
+        "[project]\nrequires-python = '>=3,!=" ^ newest_python ^ "'\n" );
     ]
     "Python intersects file and project constraints"
     (fun root ->
@@ -112,16 +106,16 @@ let () =
       check "the plan reports the intersected request and its sources"
         (member "resolvedVersion" package = `String oldest_python
         && member "requestedVersion" package
-           = `String (minor oldest_python ^ " && >=3.11,!=" ^ newest_python)
+           = `String (oldest_python ^ " && >=3,!=" ^ newest_python)
         && member "source" package
            = `String ".python-version, pyproject.toml project.requires-python");
-      write root ".python-version" (minor newest_python);
-      check "excluding the only release in a file's line leaves nothing"
+      write root ".python-version" newest_python;
+      check "declarations that exclude each other leave nothing"
         (Result.is_error (prepare root [])));
   snapshot
     [
       ("main.py", "");
-      (".python-version", minor newest_python);
+      (".python-version", newest_python);
       ("pyproject.toml", "[project]\nrequires-python = '>=3.11'\n");
       ("uv.lock", "version=1\nrequires-python = '>=3.11'\n");
     ]
