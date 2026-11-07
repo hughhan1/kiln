@@ -33,7 +33,7 @@
     (echo "(-cclib -syslibroot -cclib \"%{read-lines:sdk_path}\")"))
    (with-stdout-to
     system_libs
-    (echo "-lcurl")))))
+    (echo "")))))
 
 (rule
  (enabled_if

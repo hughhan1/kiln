@@ -10,8 +10,6 @@ case "$(uname -s)/$(uname -m)" in
   Linux/x86_64|Linux/aarch64) ;;
   Darwin/x86_64|Darwin/arm64)
     export MACOSX_DEPLOYMENT_TARGET=15.0
-    CURLCFLAGS="-isysroot $(xcrun --show-sdk-path)"
-    export CURLCFLAGS CURLLIBS=-lcurl
     compiler_dir=$(opam exec -- ocamlopt -where)
     otool -l "$compiler_dir/std_exit.o" > "$stage/compiler.txt"
     if ! awk '$1 == "minos" && $2 + 0 > 15 {bad = 1} END {exit bad}' "$stage/compiler.txt"; then
@@ -24,7 +22,7 @@ esac
 [ "$(opam exec -- ocamlopt -version)" = 5.5.1 ]
 opam install "$root" --deps-only --locked --yes --assume-depexts
 profile=release
-if [ "${KILN_STATIC_CURL:-0}" = 1 ]; then profile=static; fi
+if [ "${KILN_STATIC:-0}" = 1 ]; then profile=static; fi
 opam exec -- dune build -j "${OPAMJOBS:-2}" --root "$root" --build-dir "$stage/build" --profile "$profile" bin/main.exe ffi/libkiln.a ffi/kiln.pc
 mkdir -p "$output/bin" "$output/include" "$output/lib/pkgconfig"
 install -m 644 "$stage/build/default/ffi/libkiln.a" "$output/lib/libkiln.a"
