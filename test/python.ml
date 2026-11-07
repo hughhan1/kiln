@@ -470,7 +470,12 @@ let () =
      [tool." ^ manager ^ "]\n"
   in
   List.iter
-    (fun (manager, lockfile, default_version, install_command, lock_command) ->
+    (fun ( manager,
+           lockfile,
+           default_version,
+           tool_requirement,
+           install_command,
+           lock_command ) ->
       snapshot
         [
           ("pyproject.toml", manager_project manager);
@@ -487,7 +492,7 @@ let () =
             (contains dockerfile install_command);
           check "manager tool is installed in a separate virtualenv"
             (contains dockerfile "/opt/kiln-tools/bin/pip"
-            && contains dockerfile (manager ^ "==" ^ default_version));
+            && contains dockerfile tool_requirement);
           let open Yojson.Basic.Util in
           let package = package prepared manager in
           check "manager version is reported"
@@ -500,11 +505,13 @@ let () =
       ( "poetry",
         "poetry.lock",
         "2.5.1",
+        "poetry==2.5.1",
         "\"poetry\",\"install\",\"--only\",\"main\"",
         "\"poetry\",\"check\",\"--lock\"" );
       ( "pdm",
         "pdm.lock",
         "2.29.7",
+        "pdm[locked]==2.29.7",
         "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"",
         "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"" );
     ];
@@ -548,7 +555,7 @@ let () =
             (member "resolvedVersion" package = `String version
             && member "source" package = `String setting);
           check "the override is installed"
-            (contains (Planner.dockerfile prepared) (manager ^ "==" ^ version))))
+            (contains (Planner.dockerfile prepared) ("==" ^ version))))
     [ ("poetry", "2.4.0"); ("pdm", "2.28.1") ];
   snapshot
     [

@@ -558,7 +558,8 @@ let manager_setup app resolved manager version checks install =
             "/opt/kiln-tools/bin/pip";
             "install";
             "--no-cache-dir";
-            name ^ "==" ^ Version.show version;
+            (match name with "pdm" -> "pdm[locked]" | _ -> name)
+            ^ "==" ^ Version.show version;
           ]
       in
       let* tools = stage (Image resolved.builder) [ venv; pip ] in
