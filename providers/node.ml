@@ -299,63 +299,34 @@ let resolve app =
     | Npm, [], None -> Ok npm
     | (Npm | Pnpm), _, _ -> select_manager app node
   in
-  let* packaged =
-    let* entries =
-      Json.decode "packaged Node toolchains" (Json.list Json.object_)
-        Node_toolchains.json
-    in
-    let matches entry =
-      app.integrity = None
-      && Json.member "node" entry = `String (Semver.show node)
-      && Json.member "manager" entry = `String (name pm)
-      && Json.member "version" entry = `String (Semver.show pm_version)
-    in
-    match List.find_opt matches entries with
-    | None -> Ok None
-    | Some entry ->
-        let* builder =
-          Json.field "builder" (Json.text Build_plan.image) entry
+  let* builder = Build_plan.image release.Pins.node.Pins.builder in
+  let* runtime = Build_plan.image release.Pins.node.Pins.runtime in
+  let+ manager_install =
+    match (pm, app.integrity) with
+    | (Npm | Pnpm), Some (Javascript.Integrity (kind, hex)) ->
+        let+ command =
+          Build_plan.shell
+            (Printf.sprintf
+               "curl -fsSL %s -o /tmp/kiln-manager.tgz && echo '%s  \
+                /tmp/kiln-manager.tgz' | %ssum -c - && npm install --global \
+                /tmp/kiln-manager.tgz && rm /tmp/kiln-manager.tgz"
+               (manager_tarball pm pm_version)
+               hex
+               (Javascript.algorithm kind))
         in
-        let+ runtime =
-          Json.field "runtime" (Json.text Build_plan.image) entry
+        Some command
+    | Npm, None when Semver.compare pm_version npm = 0 -> Ok None
+    | (Npm | Pnpm), None ->
+        let+ command =
+          Build_plan.argv
+            [
+              "npm";
+              "install";
+              "--global";
+              name pm ^ "@" ^ Semver.show pm_version;
+            ]
         in
-        Some (builder, runtime)
-  in
-  let+ builder, runtime, manager_install =
-    match packaged with
-    | Some (builder, runtime) -> Ok (builder, runtime, None)
-    | None ->
-        let* builder = Build_plan.image release.Pins.node.Pins.builder in
-        let* runtime = Build_plan.image release.Pins.node.Pins.runtime in
-        let+ install =
-          match (pm, app.integrity) with
-          | (Npm | Pnpm), Some (Javascript.Integrity (kind, hex)) ->
-              let+ command =
-                Build_plan.shell
-                  (Printf.sprintf
-                     "curl -fsSL %s -o /tmp/kiln-manager.tgz && echo '%s  \
-                      /tmp/kiln-manager.tgz' | %ssum -c - && npm install \
-                      --global /tmp/kiln-manager.tgz && rm \
-                      /tmp/kiln-manager.tgz"
-                     (manager_tarball pm pm_version)
-                     hex
-                     (Javascript.algorithm kind))
-              in
-              Some command
-          | Npm, None when Semver.compare pm_version npm = 0 -> Ok None
-          | (Npm | Pnpm), None ->
-              let+ command =
-                Build_plan.argv
-                  [
-                    "npm";
-                    "install";
-                    "--global";
-                    name pm ^ "@" ^ Semver.show pm_version;
-                  ]
-              in
-              Some command
-        in
-        (builder, runtime, install)
+        Some command
   in
   { node; pm; pm_version; manager_install; builder; runtime }
 
