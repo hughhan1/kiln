@@ -1,9 +1,7 @@
 module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
-module Platforms = Kiln_planning.Platforms
 module Provider = Kiln_planning.Provider
-module Registry = Kiln_planning.Registry
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
 module Support = Kiln_planning.Support
@@ -20,32 +18,6 @@ let parse_range value =
   Result.map_error
     (fun message -> Error.Metadata ("version range " ^ value, message))
     (Semver.range value)
-
-type day = Day of int * int * int
-
-let day field text =
-  let invalid () = Json.metadata field "expected an ISO calendar date" in
-  match String.split_on_char '-' text with
-  | [ year; month; day ]
-    when String.length year = 4
-         && String.length month = 2
-         && String.length day = 2
-         && List.for_all
-              (String.for_all (function '0' .. '9' -> true | _ -> false))
-              [ year; month; day ] ->
-      let y, m, d =
-        (int_of_string year, int_of_string month, int_of_string day)
-      in
-      let leap = y mod 4 = 0 && (y mod 100 <> 0 || y mod 400 = 0) in
-      let days =
-        match m with
-        | 2 -> if leap then 29 else 28
-        | 4 | 6 | 9 | 11 -> 30
-        | 1 | 3 | 5 | 7 | 8 | 10 | 12 -> 31
-        | _ -> 0
-      in
-      if y > 0 && d > 0 && d <= days then Ok (Day (y, m, d)) else invalid ()
-  | [] | _ :: _ -> invalid ()
 
 type manager = Npm | Pnpm
 
@@ -69,7 +41,6 @@ let node_request text =
       Range r
 
 type resolution = {
-  key : string;
   node : Semver.version;
   pm : manager;
   pm_version : Semver.version;
@@ -78,29 +49,9 @@ type resolution = {
   runtime : Build_plan.image;
 }
 
-let decode value =
-  let* o = Json.object_ "resolution" value in
-  let* key = Json.field "key" Json.string o in
-  let* node = Json.field "nodeVersion" (Json.text parse_version) o in
-  let* pm = Json.field "packageManager" (Json.text manager) o in
-  let* pm_version =
-    Json.field "packageManagerVersion" (Json.text parse_version) o
-  in
-  let* manager_install =
-    Json.field "packageManagerInstall"
-      (Json.optional (fun label value ->
-           let* args = Json.list Json.string label value in
-           Build_plan.argv args))
-      o
-  in
-  let* builder = Json.field "builderImage" (Json.text Build_plan.image) o in
-  let+ runtime = Json.field "runtimeImage" (Json.text Build_plan.image) o in
-  { key; node; pm; pm_version; manager_install; builder; runtime }
-
 let encode r =
   `Assoc
     [
-      ("key", `String r.key);
       ("nodeVersion", `String (Semver.show r.node));
       ("packageManager", `String (name r.pm));
       ("packageManagerVersion", `String (Semver.show r.pm_version));
@@ -146,7 +97,6 @@ type snapshot = {
 type inputs = Whole_source | Manifests of string list
 
 type application = {
-  targets : Platforms.t;
   nodes : node_request list;
   node_declarations : Package.requirement list;
   manager_declarations : Package.requirement list;
@@ -158,7 +108,6 @@ type application = {
   inputs : inputs;
   build : Build_plan.operation list;
   command : Build_plan.argv option;
-  fingerprint : string;
 }
 
 let selected_manager pkg (snapshot : snapshot) =
@@ -255,26 +204,6 @@ let interpret (request : Request.t) (snapshot : snapshot) =
     if Request.replaces_install request then Whole_source
     else install_inputs snapshot
   in
-  let fingerprint =
-    Registry.sha256
-      (Json.encode
-         (`Assoc
-            [
-              ( "kiln",
-                `String ("ocaml-0.0.1:" ^ Registry.sha256 Node_toolchains.json)
-              );
-              ( "platforms",
-                Json.string_array
-                  (Platforms.to_strings request.Request.platforms) );
-              ("node", Json.string_array nodes_text);
-              ("manager", `String (name pm));
-              ("managerRanges", Json.string_array manager_text);
-              ( "integrity",
-                match pkg.Javascript.declared_integrity with
-                | None -> `Null
-                | Some h -> `String (Javascript.integrity_text h) );
-            ]))
-  in
   let+ install =
     Request.install_command request
       ([ name pm; "install" ]
@@ -285,7 +214,6 @@ let interpret (request : Request.t) (snapshot : snapshot) =
       | Npm | Pnpm -> [])
   in
   {
-    targets = request.Request.platforms;
     nodes;
     node_declarations;
     manager_declarations;
@@ -299,147 +227,77 @@ let interpret (request : Request.t) (snapshot : snapshot) =
       Request.build_command request
         (if Javascript.has_script pkg "build" then Some build_argv else None);
     command;
-    fingerprint;
   }
 
-type candidate = {
-  candidate_version : Semver.version;
-  candidate_npm : Semver.version option;
-  candidate_lts : string option;
-}
-
-type node_release = { version : Semver.version; npm : Semver.version }
-
-let select_node app ~today ~releases ~schedule =
-  let* today = day "today" today in
-  let parse label value =
-    let* o = Json.object_ label value in
-    let* version = Json.field "version" (Json.text parse_version) o in
-    let* npm = Json.field "npm" (Json.optional (Json.text parse_version)) o in
-    let+ lts =
-      match Json.member "lts" o with
-      | `String name -> Ok (Some (String.lowercase_ascii name))
-      | `Bool false -> Ok None
-      | `Null | `Bool true | `Int _ | `Float _ | `List _ | `Assoc _ ->
-          Json.metadata "Node LTS" "expected name or false"
-    in
-    { candidate_version = version; candidate_npm = npm; candidate_lts = lts }
-  in
-  let* values = Json.decode "Node releases" (Json.list parse) releases in
-  let support label value =
-    let* fields = Json.object_ label value in
-    let* start = Json.field "start" (Json.text (day "support start")) fields in
-    let+ finish = Json.field "end" (Json.text (day "support end")) fields in
-    (start, finish)
-  in
-  let* support = Json.decode "Node schedule" (Json.assoc support) schedule in
-  let eligible r =
-    Semver.stable r.candidate_version
-    && (match
-          List.assoc_opt
-            ("v" ^ string_of_int (Semver.major r.candidate_version))
-            support
-        with
-      | None -> false
-      | Some (start, finish) -> start <= today && today < finish)
-    && (app.nodes <> [] || Option.is_some r.candidate_lts)
-    && List.for_all
-         (function
-           | Stable -> true
-           | Lts None -> Option.is_some r.candidate_lts
-           | Lts (Some name) -> r.candidate_lts = Some name
-           | Range range -> Semver.matches range r.candidate_version)
-         app.nodes
-  in
-  let selected =
-    Support.maximum
-      ~compare:(fun a b ->
-        Semver.compare a.candidate_version b.candidate_version)
-      (List.filter eligible values)
-  in
-  match selected with
-  | None ->
-      Error
-        (Error.No_version
-           {
-             tool = "Node";
-             requirements =
-               "no supported stable Node release satisfies the runtime \
-                declarations; EOL lines are excluded";
-           })
-  | Some { candidate_npm = None; _ } ->
-      Error
-        (Error.Missing_metadata
-           "selected Node release is missing its bundled npm version")
-  | Some { candidate_version = version; candidate_npm = Some npm; _ } ->
-      Ok { version; npm }
-
-let select_manager app node bytes =
-  let parse (version_text, value) =
-    match Semver.version version_text with
-    | Error _ -> Ok None
-    | Ok version ->
-        let* o = Json.object_ "package version" value in
-        let* engines = Json.field "engines" (Json.default [] Json.object_) o in
-        let* range = Json.field "node" (Json.default "*" Json.string) engines in
-        let* deprecated =
-          Json.field "deprecated" (Json.default "" Json.string) o
-        in
-        let* range = parse_range range in
-        Ok
-          (if
-             List.for_all
-               (fun range -> Semver.matches range version)
-               app.manager_ranges
-             && Semver.matches range node.version
-             && (app.manager_ranges <> []
-                || (Semver.stable version && deprecated = ""))
-           then Some version
-           else None)
-  in
-  let* fields = Json.decode "npm registry" Json.object_ bytes in
-  let* versions = Json.field "versions" Json.object_ fields in
-  let* versions = Support.traverse parse versions in
-  Option.to_result
+(* The default is the newest LTS release; EOL lines never enter the pins. *)
+let select_node app =
+  Support.select
+    ~parse:(fun release -> parse_version release.Pins.node.Pins.release)
+    ~compare:Semver.compare
+    ~accept:(fun version release ->
+      let lts = release.Pins.lts in
+      (app.nodes <> [] || Option.is_some lts)
+      && List.for_all
+           (function
+             | Stable -> true
+             | Lts None -> Option.is_some lts
+             | Lts (Some name) -> lts = Some name
+             | Range range -> Semver.matches range version)
+           app.nodes)
     ~none:
-      (Error.No_version
-         {
-           tool = "package manager";
-           requirements = "no eligible Node-compatible release";
-         })
-    (Support.maximum ~compare:Semver.compare (List.filter_map Fun.id versions))
+      (Package.no_version ~tool:"Node" app.node_declarations
+         (List.map (fun release -> release.Pins.node.Pins.release) Pins.node))
+    Pins.node
+
+(* npm installs a manager at build time, so an exact declaration needs no pin. *)
+let select_manager app node =
+  let allowed version =
+    List.for_all (fun range -> Semver.matches range version) app.manager_ranges
+  in
+  let declared = Package.versions app.manager_declarations in
+  match
+    List.find_map (fun text -> Result.to_option (Semver.version text)) declared
+  with
+  | Some version when allowed version -> Ok version
+  | Some _ | None ->
+      let tools =
+        match app.manager with Npm -> Pins.npm | Pnpm -> Pins.pnpm
+      in
+      let+ (version, _), _ =
+        Support.select
+          ~parse:(fun tool ->
+            let* version = parse_version tool.Pins.tool in
+            let+ engines = parse_range tool.Pins.engines in
+            (version, engines))
+          ~compare:(fun (a, _) (b, _) -> Semver.compare a b)
+          ~accept:(fun (version, engines) _ ->
+            allowed version && Semver.matches engines node)
+          ~none:
+            (Error.No_version
+               {
+                 tool = name app.manager;
+                 requirements =
+                   String.concat " && "
+                     (declared @ [ "Node " ^ Semver.show node ]);
+                 supported = List.map (fun tool -> tool.Pins.tool) tools;
+               })
+          tools
+      in
+      version
 
 let manager_tarball manager version =
   let manager = name manager in
   "https://registry.npmjs.org/" ^ manager ^ "/-/" ^ manager ^ "-"
   ^ Semver.show version ^ ".tgz"
 
-let verify_integrity (Javascript.Integrity (kind, expected)) bytes =
-  let module Hash = (val Digestif.module_of_hash' (kind :> Digestif.hash')) in
-  let actual = Hash.(to_hex (digest_string bytes)) in
-  if expected = actual then Ok () else Error Error.Integrity_mismatch
-
-let resolve ~today ~fetch app =
-  let* releases = fetch "https://nodejs.org/dist/index.json" None in
-  let* schedule =
-    fetch "https://raw.githubusercontent.com/nodejs/Release/main/schedule.json"
-      None
-  in
-  let* node = select_node app ~today ~releases ~schedule in
+let resolve app =
+  let* node, release = select_node app in
+  let* npm = parse_version release.Pins.npm in
   let pm = app.manager in
   let* pm_version =
     match (pm, app.manager_ranges, app.integrity) with
-    | Npm, [], None -> Ok node.npm
-    | (Npm | Pnpm), _, _ ->
-        let* metadata = fetch ("https://registry.npmjs.org/" ^ name pm) None in
-        select_manager app node metadata
-  in
-  let* () =
-    match app.integrity with
-    | None -> Ok ()
-    | Some integrity ->
-        let* bytes = fetch (manager_tarball pm pm_version) None in
-        verify_integrity integrity bytes
+    | Npm, [], None -> Ok npm
+    | (Npm | Pnpm), _, _ -> select_manager app node
   in
   let* packaged =
     let* entries =
@@ -448,7 +306,7 @@ let resolve ~today ~fetch app =
     in
     let matches entry =
       app.integrity = None
-      && Json.member "node" entry = `String (Semver.show node.version)
+      && Json.member "node" entry = `String (Semver.show node)
       && Json.member "manager" entry = `String (name pm)
       && Json.member "version" entry = `String (Semver.show pm_version)
     in
@@ -463,16 +321,12 @@ let resolve ~today ~fetch app =
         in
         Some (builder, runtime)
   in
-  let* builder, runtime, manager_install =
+  let+ builder, runtime, manager_install =
     match packaged with
     | Some (builder, runtime) -> Ok (builder, runtime, None)
     | None ->
-        let image suffix =
-          Registry.image fetch ~platforms:app.targets ~repository:"library/node"
-            (Semver.show node.version ^ suffix)
-        in
-        let* builder = image "-bookworm" in
-        let* runtime = image "-bookworm-slim" in
+        let* builder = Build_plan.image release.Pins.node.Pins.builder in
+        let* runtime = Build_plan.image release.Pins.node.Pins.runtime in
         let+ install =
           match (pm, app.integrity) with
           | (Npm | Pnpm), Some (Javascript.Integrity (kind, hex)) ->
@@ -488,7 +342,7 @@ let resolve ~today ~fetch app =
                      (Javascript.algorithm kind))
               in
               Some command
-          | Npm, None when Semver.compare pm_version node.npm = 0 -> Ok None
+          | Npm, None when Semver.compare pm_version npm = 0 -> Ok None
           | (Npm | Pnpm), None ->
               let+ command =
                 Build_plan.argv
@@ -503,16 +357,7 @@ let resolve ~today ~fetch app =
         in
         (builder, runtime, install)
   in
-  Ok
-    {
-      key = app.fingerprint;
-      node = node.version;
-      pm;
-      pm_version;
-      manager_install;
-      builder;
-      runtime;
-    }
+  { node; pm; pm_version; manager_install; builder; runtime }
 
 let id = "node"
 let public_name = id
@@ -661,11 +506,6 @@ let load request source =
     }
 
 let startup app = app.command
-let fingerprint app = app.fingerprint
-
-let legacy app value =
-  let+ r = decode value in
-  if r.key = app.fingerprint then Some r else None
 
 let packages app r =
   [

@@ -1,9 +1,7 @@
 module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
-module Platforms = Kiln_planning.Platforms
 module Provider = Kiln_planning.Provider
-module Registry = Kiln_planning.Registry
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
 module Semver = Kiln_core.Semver
@@ -19,7 +17,6 @@ let detect source =
     (if Source.has source "go.mod" then Provider.Explicit else Provider.No_match)
 
 type application = {
-  platforms : Platforms.t;
   requirements : Semver_image.requirements;
   minimum : Semver.version;
   install : Build_plan.argv;
@@ -107,7 +104,6 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
   in
   Ok
     {
-      platforms = request.Request.platforms;
       requirements;
       minimum;
       install;
@@ -118,21 +114,13 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
 
 let startup app = app.start
 
-let fingerprint app =
-  Semver_image.fingerprint app.requirements ^ Semver.show app.minimum
-
-let resolve ~today:_ ~fetch app =
+let resolve app =
   let* compiler =
-    Semver_image.resolve ~fetch ~repository:"library/golang"
-      ~platforms:app.platforms
-      ~accept:(fun version ->
-        Semver.major version = 1 && Semver.compare version app.minimum >= 0)
-      app.requirements
+    Semver_image.resolve ~tool:"Go"
+      ~accept:(fun version -> Semver.compare version app.minimum >= 0)
+      ~pins:Pins.golang app.requirements
   in
-  let+ runtime =
-    Registry.image fetch ~platforms:app.platforms ~repository:"library/debian"
-      "bookworm-slim"
-  in
+  let+ runtime = Build_plan.image Pins.debian in
   { compiler; runtime }
 
 let encode resolved =
@@ -141,16 +129,6 @@ let encode resolved =
       ("compiler", Semver_image.encode resolved.compiler);
       ("runtime", `String (Build_plan.image_ref resolved.runtime));
     ]
-
-let decode value =
-  let* fields = Json.object_ "Go resolution" value in
-  let* compiler =
-    Json.field "compiler" (fun _ value -> Semver_image.decode value) fields
-  in
-  let+ runtime = Json.field "runtime" (Json.text Build_plan.image) fields in
-  { compiler; runtime }
-
-let legacy _ _ = Error Error.Invalid_resolution
 
 let packages app resolved =
   [ Semver_image.package id app.requirements resolved.compiler ]

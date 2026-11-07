@@ -7,7 +7,7 @@ let write path contents =
   Out_channel.with_open_bin path (fun channel ->
       Out_channel.output_string channel contents)
 
-let request directory provider start build_cmd start_cmd config_file previous
+let request directory provider start build_cmd start_cmd config_file
     error_missing_start entries platforms =
   let environment =
     match Kiln_planning.Environment.of_args ~getenv:Sys.getenv_opt entries with
@@ -15,12 +15,8 @@ let request directory provider start build_cmd start_cmd config_file previous
     | Error error -> fail (Kiln_core.Error.show error)
   in
   let directory = Unix.realpath directory in
-  let previous =
-    List.map (fun (name, version) -> (name, `String version)) previous
-  in
   let fields =
     [
-      ("previousVersions", `Assoc previous);
       ("source", `String directory);
       ("errorMissingStartCommand", `Bool error_missing_start);
       ("environment", Kiln_planning.Environment.encode environment);
@@ -104,13 +100,6 @@ let main () =
     option Arg.string "railpack.json" "config-file"
       "Application configuration file."
   in
-  let previous =
-    Arg.(
-      value
-      & opt_all (pair ~sep:'@' nonempty nonempty) []
-      & info [ "previous" ] ~docv:"PACKAGE@VERSION"
-          ~doc:"Previously resolved package@version; repeat per package.")
-  in
   let application_env =
     Arg.(
       value & opt_all string []
@@ -122,7 +111,7 @@ let main () =
   let request =
     Term.(
       const request $ directory $ provider $ start $ build_cmd $ start_cmd
-      $ config_file $ previous
+      $ config_file
       $ flag "error-missing-start" "Require a startup command."
       $ application_env
       $ option
@@ -149,7 +138,7 @@ let main () =
         (flag ^ "=true") :: normalize_args rest
     | (( "--platform" | "--plan-out" | "--info-out" | "--provider"
        | "--start-arg" | "--build-cmd" | "--start-cmd" | "--config-file"
-       | "--previous" | "--env" ) as option)
+       | "--env" ) as option)
       :: value :: rest ->
         (option ^ "=" ^ value) :: normalize_args rest
     | arg :: rest -> arg :: normalize_args rest

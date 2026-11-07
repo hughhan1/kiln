@@ -12,8 +12,7 @@ typedef enum {
   KILN_OK = 0,
   KILN_ERROR = 1,
   KILN_INTERNAL = 2,
-  KILN_CANCELLED = 3,
-  KILN_TRANSIENT = 75
+  KILN_CANCELLED = 3
 } kiln_status;
 typedef struct {
   /* Borrowed until kiln_request_free; len excludes the trailing NUL. */

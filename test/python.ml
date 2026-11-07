@@ -1,28 +1,20 @@
 module Planner = Kiln_planning.Planner
 module Build_plan = Kiln_planning.Build_plan
+module Pins = Kiln_providers.Pins
+module Version = Kiln_providers.Python_version
 open Contract_support
 
-let fetch =
-  registry
-    [
-      ( "library/python",
-        List.concat_map
-          (fun version -> [ version ^ "-trixie"; version ^ "-slim-trixie" ])
-          [
-            "3.11.14";
-            "3.12.0";
-            "3.12.11";
-            "3.12.12";
-            "3.13.7";
-            "3.14.0rc1";
-            "4.0.0";
-          ]
-        @ [ "3.14.0-alpine" ] );
-      ("astral/uv", [ "0.8.0"; "0.9.1"; "0.10.0-rc.1" ]);
-    ]
+let prepare root fields = Kiln_io.Driver.prepare (request root fields)
+let python_pins = List.map (fun pin -> pin.Pins.release) Pins.python
+let uv_pins = List.map (fun pin -> pin.Pins.version) Pins.uv
+let oldest_python = List.hd python_pins
+let newest_python = last python_pins
 
-let prepare ?(fetch = fetch) root fields =
-  Kiln_io.Driver.prepare_with ~today:"2026-10-12" ~fetch (request root fields)
+(* A pinned release's minor line, such as 3.13 for 3.13.7. *)
+let minor release =
+  match String.split_on_char '.' release with
+  | major :: minor :: _ -> major ^ "." ^ minor
+  | [] | [ _ ] -> failwith ("expected a release: " ^ release)
 
 let selected response =
   Yojson.Basic.Util.(
@@ -88,93 +80,79 @@ let ordered steps prefixes =
 
 let () =
   List.iter
-    (fun (constraint_, versions, expected) ->
-      snapshot
-        [
-          ("main.py", "");
-          ( "pyproject.toml",
-            "[project]\nrequires-python = '" ^ constraint_ ^ "'\n" );
-        ]
-        ("Python requirement " ^ constraint_ ^ ": " ^ String.concat "," versions)
-        (fun root ->
-          let fetch =
-            registry
-              [
-                ( "library/python",
-                  List.concat_map
-                    (fun version ->
-                      [ version ^ "-trixie"; version ^ "-slim-trixie" ])
-                    versions );
-              ]
+    (fun (constraint_, included, excluded) ->
+      test ("Python requirement " ^ constraint_) (fun () ->
+          let requirement = ok (Version.specifier constraint_) in
+          let holds release =
+            Version.matches requirement (ok (Version.version release))
           in
-          let result = prepare ~fetch root [] in
-          match expected with
-          | Some version ->
-              check "highest matching stable interpreter"
-                (selected (ok result) = `String version)
-          | None ->
-              check "no matching interpreter"
-                (Result.map selected result
-                = Error
-                    (Kiln_core.Error.No_version
-                       {
-                         tool = "library/python";
-                         requirements = "declared version constraints";
-                       }))))
+          check "matching releases" (List.for_all holds included);
+          check "other releases" (not (List.exists holds excluded))))
     [
-      (">=3.11,<3.14,!=3.12.*", [ "3.11.14"; "3.13.7" ], Some "3.13.7");
-      (">=3.11,<3.14,!=3.12.*", [ "3.10.9"; "3.12.12"; "3.14.0" ], None);
-      ("~=3.12.1", [ "3.12.1"; "3.12.12" ], Some "3.12.12");
-      ("~=3.12.1", [ "3.12.0"; "3.13.0" ], None);
-      ("~=3.12", [ "3.12.0"; "3.13.7" ], Some "3.13.7");
-      ("~=3.12", [ "3.11.0"; "4.0.0" ], None);
-      ("==3.12", [ "3.12.0"; "3.12.1" ], Some "3.12.0");
-      ("==3.12,>3.12", [ "3.12.0"; "3.12.1" ], None);
-      ("<=3.12.11,>3.11.14", [ "3.12.0"; "3.12.11" ], Some "3.12.11");
-      ("<=3.12.11,>3.11.14", [ "3.11.14"; "3.12.12" ], None);
+      ( ">=3.11,<3.14,!=3.12.*",
+        [ "3.11.14"; "3.13.7" ],
+        [ "3.10.9"; "3.12.12"; "3.14.0" ] );
+      ("~=3.12.1", [ "3.12.1"; "3.12.12" ], [ "3.12.0"; "3.13.0" ]);
+      ("~=3.12", [ "3.12.0"; "3.13.7" ], [ "3.11.0"; "4.0.0" ]);
+      ("==3.12", [ "3.12.0" ], [ "3.12.1" ]);
+      ("==3.12,>3.12", [], [ "3.12.0"; "3.12.1" ]);
+      ("<=3.12.11,>3.11.14", [ "3.12.0"; "3.12.11" ], [ "3.11.14"; "3.12.12" ]);
     ];
+  List.iter
+    (fun release ->
+      snapshot
+        [ ("main.py", ""); (".python-version", minor release) ]
+        ("Python " ^ minor release ^ " selects its pin")
+        (fun root ->
+          check "pinned release"
+            (selected (ok (prepare root [])) = `String release)))
+    python_pins;
+  snapshot
+    [ ("main.py", ""); (".python-version", "3.1.4") ]
+    "an unsupported Python lists what is supported"
+    (fun root ->
+      check "supported releases"
+        (Result.map selected (prepare root [])
+        = Error
+            (Kiln_core.Error.No_version
+               {
+                 tool = "Python";
+                 requirements = "3.1.4";
+                 supported = python_pins;
+               })));
   snapshot
     [
       ("main.py", "print('hello')");
-      (".python-version", "3.12");
-      ("pyproject.toml", "[project]\nrequires-python = '>=3.11,!=3.12.12'\n");
+      (".python-version", minor oldest_python);
+      ( "pyproject.toml",
+        "[project]\nrequires-python = '>=3.11,!=" ^ newest_python ^ "'\n" );
     ]
     "Python intersects file and project constraints"
     (fun root ->
       let first = ok (prepare root []) in
-      check "does not truncate a range" (selected first = `String "3.12.11");
-      write root "main.py" "print('changed')";
-      let reused =
-        ok
-          (prepare
-             ~fetch:(fun _ _ -> failwith "offline discovery")
-             root
-             [ ("resolution", first.Planner.resolution) ])
-      in
-      check "toolchain unchanged"
-        (reused.Planner.resolution = first.Planner.resolution);
+      check "the file selects within the range"
+        (selected first = `String oldest_python);
       let open Yojson.Basic.Util in
       let package =
-        `Assoc (Planner.info reused)
+        `Assoc (Planner.info first)
         |> member "resolvedPackages" |> member "python"
       in
-      check "reused toolchain retains the intersected request and its sources"
-        (member "requestedVersion" package = `String "3.12 && >=3.11,!=3.12.12"
+      check "the plan reports the intersected request and its sources"
+        (member "requestedVersion" package
+         = `String (minor oldest_python ^ " && >=3.11,!=" ^ newest_python)
         && member "source" package
            = `String ".python-version, pyproject.toml project.requires-python");
-      write root ".python-version" "3.13";
-      check "requirements invalidate reuse"
-        (selected
-           (ok (prepare root [ ("resolution", first.Planner.resolution) ]))
-        = `String "3.13.7"));
+      write root ".python-version" (minor newest_python);
+      check "excluding the only release in a file's line leaves nothing"
+        (Result.is_error (prepare root [])));
   snapshot
     [
       ("main.py", "");
-      (".python-version", "3.12.11");
+      (".python-version", minor newest_python);
       ("pyproject.toml", "[project]\nrequires-python = '>=3.11'\n");
       ("uv.lock", "version=1\nrequires-python = '>=3.11'\n");
     ]
-    "uv defaults, previous versions, and intersected declarations"
+    "uv defaults and intersected declarations"
     (fun root ->
       let open Yojson.Basic.Util in
       let package prepared =
@@ -185,38 +163,30 @@ let () =
       check "uv default has no declared version"
         (member "requestedVersion" default = `Null
         && member "source" default = `String "kiln default"
-        && member "resolvedVersion" default = `String "0.9.1");
-      let previous = ("previousVersions", `Assoc [ ("uv", `String "0.8.0") ]) in
-      let pinned =
-        ok
-          (prepare
-             ~fetch:(fun url token ->
-               check "exact toolchain avoids catalogs"
-                 (not (String.ends_with ~suffix:"/tags/list" url));
-               fetch url token)
-             root [ previous ])
-      in
-      let uv = package pinned in
-      check "previous version is preserved as declared"
-        (member "requestedVersion" uv = `String "0.8.0"
-        && member "resolvedVersion" uv = `String "0.8.0"
-        && member "source" uv = `String "previousVersions");
-      write root "uv.toml" "required-version = '>=0.9'\n";
+        && member "resolvedVersion" default = `String (last uv_pins));
+      let oldest = List.hd uv_pins in
+      write root "uv.toml" ("required-version = '>=" ^ oldest ^ "'\n");
+      write root "pyproject.toml"
+        ("[project]\n\
+          requires-python = '>=3.11'\n\
+          [tool.uv]\n\
+          required-version = '<=" ^ oldest ^ "'\n");
+      let uv = package (ok (prepare root [])) in
+      check "explicit constraints select a pin and report their origins"
+        (member "requestedVersion" uv
+         = `String ("<=" ^ oldest ^ " && >=" ^ oldest)
+        && member "resolvedVersion" uv = `String oldest
+        && member "source" uv
+           = `String
+               "pyproject.toml tool.uv.required-version, uv.toml \
+                required-version");
       write root "pyproject.toml"
         "[project]\n\
          requires-python = '>=3.11'\n\
          [tool.uv]\n\
-         required-version = '<0.10'\n";
-      let first = ok (prepare root [ previous ]) in
-      let uv = package first in
-      check
-        "explicit constraints supersede previous defaults with their origins"
-        (member "requestedVersion" uv = `String "<0.10 && >=0.9"
-        && member "resolvedVersion" uv = `String "0.9.1"
-        && member "source" uv
-           = `String
-               "pyproject.toml tool.uv.required-version, uv.toml \
-                required-version"));
+         required-version = '==0.0.1'\n";
+      check "an unsupported uv lists what is supported"
+        (lists_supported (prepare root []) uv_pins));
   snapshot
     [
       ("main.py", "");
@@ -237,8 +207,8 @@ let () =
                ( "environment",
                  `Assoc
                    [
-                     ("RAILPACK_PYTHON_VERSION", `String "3.12.11");
-                     ("RAILPACK_UV_VERSION", `String "0.8.0");
+                     ("RAILPACK_PYTHON_VERSION", `String oldest_python);
+                     ("RAILPACK_UV_VERSION", `String (List.hd uv_pins));
                    ] );
              ])
       in
@@ -254,8 +224,8 @@ let () =
             && member "requestedVersion" package = `String version
             && member "source" package = `String setting))
         [
-          ("python", "3.12.11", "RAILPACK_PYTHON_VERSION");
-          ("uv", "0.8.0", "RAILPACK_UV_VERSION");
+          ("python", oldest_python, "RAILPACK_PYTHON_VERSION");
+          ("uv", List.hd uv_pins, "RAILPACK_UV_VERSION");
         ]);
   snapshot
     [
@@ -610,7 +580,7 @@ let () =
             else "distribution=false\n" );
           ("main.py", "");
         ]
-        (manager ^ " unlocked install and version reuse")
+        (manager ^ " unlocked install")
         (fun root ->
           let first = ok (prepare root []) in
           let dockerfile = Planner.dockerfile first in
@@ -620,17 +590,7 @@ let () =
           check "unlocked installs do not copy project metadata back"
             (not (Sys.file_exists (Filename.concat root lockfile)));
           check "default manager command honors package mode"
-            (contains dockerfile no_root);
-          let reused =
-            ok
-              (prepare
-                 ~fetch:(fun _ _ ->
-                   failwith "manager resolution discovered tools")
-                 root
-                 [ ("resolution", first.Planner.resolution) ])
-          in
-          check "manager resolution is reused without registry discovery"
-            (reused.Planner.resolution = first.Planner.resolution)))
+            (contains dockerfile no_root)))
     [ ("poetry", "poetry.lock", "--no-root"); ("pdm", "pdm.lock", "--no-self") ];
   snapshot
     [
@@ -664,19 +624,7 @@ let () =
       check "Poetry package mode installs the root project"
         (contains
            (Planner.dockerfile override)
-           "\"poetry\",\"install\",\"--only\",\"main\"");
-      let previous =
-        ok
-          (prepare root
-             [ ("previousVersions", `Assoc [ ("poetry", `String "2.3.0") ]) ])
-      in
-      let package =
-        `Assoc (Planner.info previous)
-        |> member "resolvedPackages" |> member "poetry"
-      in
-      check "previous manager version is selected"
-        (member "resolvedVersion" package = `String "2.3.0"
-        && member "source" package = `String "previousVersions"));
+           "\"poetry\",\"install\",\"--only\",\"main\""));
   List.iter
     (fun (manager, extra, expected) ->
       snapshot
@@ -696,7 +644,7 @@ let () =
       ("pdm.lock", "");
       ("main.py", "");
     ]
-    "PDM version override and previous version"
+    "PDM version override"
     (fun root ->
       let open Yojson.Basic.Util in
       let package prepared =
@@ -714,16 +662,7 @@ let () =
       let package_override = package override in
       check "exact PDM override is reported"
         (member "resolvedVersion" package_override = `String "2.28.1"
-        && member "source" package_override = `String "RAILPACK_PDM_VERSION");
-      let previous =
-        ok
-          (prepare root
-             [ ("previousVersions", `Assoc [ ("pdm", `String "2.27.0") ]) ])
-      in
-      let package_previous = package previous in
-      check "previous PDM version is selected"
-        (member "resolvedVersion" package_previous = `String "2.27.0"
-        && member "source" package_previous = `String "previousVersions"));
+        && member "source" package_override = `String "RAILPACK_PDM_VERSION"));
   snapshot
     [
       ( "pyproject.toml",

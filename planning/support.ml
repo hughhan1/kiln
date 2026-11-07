@@ -23,5 +23,18 @@ let maximum ~compare =
       | None | Some _ -> Some next)
     None
 
+let select ~parse ~compare ~accept ~none rows =
+  let* candidates =
+    traverse
+      (fun row ->
+        let+ version = parse row in
+        (version, row))
+      rows
+  in
+  Option.to_result ~none
+    (maximum
+       ~compare:(fun (a, _) (b, _) -> compare a b)
+       (List.filter (fun (version, row) -> accept version row) candidates))
+
 let inside root path =
   path = root || String.starts_with ~prefix:(Filename.concat root "") path

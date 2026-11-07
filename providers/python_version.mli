@@ -24,7 +24,3 @@ val version_file : string -> (requirement list, Kiln_core.Error.t) result
 
 val matches : requirement list -> version -> bool
 (** Require every constraint to hold for a release. *)
-
-val exact : requirement list -> version option
-(** Return an equality-pinned release, if present. Other constraints must still
-    be checked with [matches]. *)

@@ -8,35 +8,12 @@ let ok = function
 
 let contains text pattern = Option.is_some (String.find_first ~sub:pattern text)
 
-let registry_index =
-  {|{"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}|}
-
-let registry repositories =
-  let responses =
-    List.concat_map
-      (fun (repository, tags) ->
-        let root = "https://registry-1.docker.io/v2/" ^ repository ^ "/" in
-        ( "https://auth.docker.io/token?service=registry.docker.io&scope=repository:"
-          ^ repository ^ ":pull",
-          (None, {|{"token":"test"}|}) )
-        :: ( root ^ "tags/list",
-             ( Some "test",
-               Yojson.Basic.to_string
-                 (`Assoc
-                    [ ("tags", `List (List.map (fun tag -> `String tag) tags)) ])
-             ) )
-        :: List.map
-             (fun tag ->
-               (root ^ "manifests/" ^ tag, (Some "test", registry_index)))
-             tags)
-      repositories
-  in
-  fun url token ->
-    match List.assoc_opt url responses with
-    | Some (expected, bytes) ->
-        check ("registry authorization: " ^ url) (token = expected);
-        Ok bytes
-    | None -> failwith ("unexpected registry URL: " ^ url)
+let lists_supported result supported =
+  match result with
+  | Ok _ -> false
+  | Error error ->
+      contains (Error.show error)
+        ("; supported: " ^ String.concat ", " supported)
 
 let rec remove path =
   match (Unix.lstat path).Unix.st_kind with
@@ -140,3 +117,4 @@ let snapshot files label action =
           action root))
 
 let finish () = if !failed then exit 1
+let last values = List.nth values (List.length values - 1)

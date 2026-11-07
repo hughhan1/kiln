@@ -1,9 +1,7 @@
 module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
-module Platforms = Kiln_planning.Platforms
 module Provider = Kiln_planning.Provider
-module Registry = Kiln_planning.Registry
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
 module Support = Kiln_planning.Support
@@ -52,20 +50,22 @@ type install =
       dependencies : string list;
     }
   | Uv_install of Version.requirement list
-  | Manager_install of { manager : manager; lock : bool; install_root : bool }
+  | Manager_install of {
+      manager : manager;
+      version : Version.version;
+      lock : bool;
+      install_root : bool;
+    }
 
 and manager = Poetry | Pdm
 
 type inputs = Whole_source | Manifests of string list
 
 type application = {
-  platforms : Platforms.t;
   requirements : Version.requirement list;
   python_declarations : Package.requirement list;
   uv_declarations : Package.requirement list;
   manager_declarations : Package.requirement list;
-  manager_version : Version.version option;
-  fingerprint : string;
   install : install;
   inputs : inputs;
   native : string list option;
@@ -157,7 +157,7 @@ let manager_declarations request manager =
     | [ version ] -> Version.version version
     | _ :: _ :: _ -> Json.metadata name "expected one exact version override"
   in
-  Ok (name, declarations, version)
+  Ok (declarations, version)
 
 let standard_project root =
   match Toml.field root [ "project" ] Otoml.get_value with
@@ -389,17 +389,17 @@ let load request source =
   let uv_requirements =
     List.sort_uniq String.compare (Package.versions uv_declarations)
   in
-  let* manager_declarations, manager_version =
+  let* selected_manager =
     match manager with
-    | None -> Ok ([], None)
+    | None -> Ok None
     | Some manager ->
-        let+ _, declarations, version = manager_declarations request manager in
-        (declarations, Some (manager, version))
+        let+ declarations, version = manager_declarations request manager in
+        Some (manager, declarations, version)
   in
   let* dependencies = Toml.strings root [ "project"; "dependencies" ] in
   let* install =
-    match (manager, lock) with
-    | Some manager, _ ->
+    match (selected_manager, lock) with
+    | Some (manager, _, version), _ ->
         let* install_root =
           match manager with
           | Poetry ->
@@ -417,7 +417,7 @@ let load request source =
               in
               Option.is_some name && Option.value ~default:true distribution
         in
-        Ok (Manager_install { manager; lock = has_lock; install_root })
+        Ok (Manager_install { manager; version; lock = has_lock; install_root })
     | None, None ->
         Ok
           (Pip_install
@@ -487,46 +487,15 @@ let load request source =
           Result.map Option.some (Build_plan.argv [ "python"; "main.py" ])
         else Ok None
   in
-  let fingerprint_fields =
-    [
-      ( "python",
-        Json.string_array
-          (Package.versions file_declarations @ requirements_text) );
-      ( "installer",
-        `String
-          (match manager with
-          | Some Poetry -> "poetry"
-          | Some Pdm -> "pdm"
-          | None -> if Option.is_some lock then "uv" else "pip") );
-      ("uv", Json.string_array uv_requirements);
-    ]
-  in
-  let fingerprint_fields =
-    match manager_version with
-    | None -> fingerprint_fields
-    | Some (manager, version) ->
-        fingerprint_fields
-        @ [
-            ( "manager",
-              `String (match manager with Poetry -> "poetry" | Pdm -> "pdm") );
-            ( "managerVersion",
-              Json.string_array (Package.versions manager_declarations) );
-            ( "managerDefault",
-              `String
-                ((match manager with Poetry -> "poetry-" | Pdm -> "pdm-")
-                ^ Version.show version) );
-          ]
-  in
-  let fingerprint = Json.encode (`Assoc fingerprint_fields) in
   Ok
     {
-      platforms = request.Request.platforms;
       requirements;
       python_declarations;
       uv_declarations;
-      manager_declarations;
-      manager_version = Option.map snd manager_version;
-      fingerprint;
+      manager_declarations =
+        Option.fold ~none:[]
+          ~some:(fun (_, declarations, _) -> declarations)
+          selected_manager;
       install;
       inputs;
       native;
@@ -538,55 +507,40 @@ let load request source =
     }
 
 let startup app = app.start
-let fingerprint app = app.fingerprint
 
-let resolve ~today:_ ~fetch app =
-  let select repository requirements parse =
-    Registry.select fetch ~repository
-      ~exact:(Version.exact requirements)
-      ~parse ~compare:Version.compare
-      ~matches:(Version.matches requirements)
-      ~unavailable:
-        (Error.No_version
-           { tool = repository; requirements = "declared version constraints" })
+let resolve app =
+  let* python, toolchain =
+    Support.select
+      ~parse:(fun pin -> Version.version pin.Pins.release)
+      ~compare:Version.compare
+      ~accept:(fun version _ -> Version.matches app.requirements version)
+      ~none:
+        (Package.no_version ~tool:"Python" app.python_declarations
+           (List.map (fun pin -> pin.Pins.release) Pins.python))
+      Pins.python
   in
-  let* python =
-    select "library/python" app.requirements (fun tag ->
-        if String.ends_with ~suffix:"-trixie" tag then
-          Result.to_option (Version.version (String.drop_last 7 tag))
-        else None)
-  in
-  let* builder =
-    Registry.image fetch ~platforms:app.platforms ~repository:"library/python"
-      (Version.show python ^ "-trixie")
-  in
-  let* runtime =
-    Registry.image fetch ~platforms:app.platforms ~repository:"library/python"
-      (Version.show python ^ "-slim-trixie")
-  in
+  let* builder = Build_plan.image toolchain.Pins.builder in
+  let* runtime = Build_plan.image toolchain.Pins.runtime in
   let+ installer =
     match app.install with
     | Pip_install _ -> Ok Pip
     | Uv_install requirements ->
-        let* version =
-          select "astral/uv" requirements (fun tag ->
-              Result.to_option (Version.version tag))
+        let* version, pin =
+          Support.select
+            ~parse:(fun pin -> Version.version pin.Pins.version)
+            ~compare:Version.compare
+            ~accept:(fun version _ -> Version.matches requirements version)
+            ~none:
+              (Package.no_version ~tool:"uv" app.uv_declarations
+                 (List.map (fun pin -> pin.Pins.version) Pins.uv))
+            Pins.uv
         in
-        let+ image =
-          Registry.image fetch ~platforms:app.platforms ~repository:"astral/uv"
-            (Version.show version)
-        in
+        let+ image = Build_plan.image pin.Pins.image in
         Uv { version; image }
-    | Manager_install { manager = Poetry; _ } ->
-        let+ version =
-          Option.to_result ~none:Error.Invalid_resolution app.manager_version
-        in
-        Poetry_tool { tool_version = version }
-    | Manager_install { manager = Pdm; _ } ->
-        let+ version =
-          Option.to_result ~none:Error.Invalid_resolution app.manager_version
-        in
-        Pdm_tool { tool_version = version }
+    | Manager_install { manager = Poetry; version; _ } ->
+        Ok (Poetry_tool { tool_version = version })
+    | Manager_install { manager = Pdm; version; _ } ->
+        Ok (Pdm_tool { tool_version = version })
   in
   { python; builder; runtime; installer }
 
@@ -620,36 +574,6 @@ let encode resolved =
       ("runtime", `String (Build_plan.image_ref resolved.runtime));
       ("installer", installer);
     ]
-
-let decode value =
-  let* fields = Json.object_ "Python resolution" value in
-  let* python = Json.field "python" (Json.text Version.version) fields in
-  let* builder = Json.field "builder" (Json.text Build_plan.image) fields in
-  let* runtime = Json.field "runtime" (Json.text Build_plan.image) fields in
-  let* installer = Json.field "installer" Json.object_ fields in
-  let* name = Json.field "name" Json.string installer in
-  let+ installer =
-    match name with
-    | "pip" -> Ok Pip
-    | "uv" ->
-        let* version =
-          Json.field "version" (Json.text Version.version) installer
-        in
-        let+ image =
-          Json.field "image" (Json.text Build_plan.image) installer
-        in
-        Uv { version; image }
-    | ("poetry" | "pdm") as name ->
-        let+ version =
-          Json.field "version" (Json.text Version.version) installer
-        in
-        let tool = { tool_version = version } in
-        if name = "poetry" then Poetry_tool tool else Pdm_tool tool
-    | _ -> Error Error.Invalid_resolution
-  in
-  { python; builder; runtime; installer }
-
-let legacy _ _ = Error Error.Invalid_resolution
 
 let manager_setup app resolved name version checks install =
   match app.install_override with
@@ -775,13 +699,14 @@ let plan app resolved =
           ( [ copy uv_stage [ "/uv" ] "/usr/local/bin/uv"; Env env ],
             defaults,
             [] )
-    | Manager_install { manager = Poetry; lock; install_root }, Poetry_tool tool
-      ->
+    | ( Manager_install { manager = Poetry; lock; install_root; version = _ },
+        Poetry_tool tool ) ->
         manager_setup app resolved "poetry" tool.tool_version
           (if lock then [ [ "check"; "--lock" ] ] else [])
           ([ "install"; "--only"; "main"; "--no-interaction"; "--no-ansi" ]
           @ if install_root then [] else [ "--no-root" ])
-    | Manager_install { manager = Pdm; lock; install_root }, Pdm_tool tool ->
+    | ( Manager_install { manager = Pdm; lock; install_root; version = _ },
+        Pdm_tool tool ) ->
         manager_setup app resolved "pdm" tool.tool_version []
           ([ "install"; "--prod"; "--no-editable" ]
           @ (if lock then [ "--check" ] else [])
@@ -792,7 +717,7 @@ let plan app resolved =
     | Manager_install _, (Pip | Uv _)
     | Manager_install { manager = Poetry; _ }, Pdm_tool _
     | Manager_install { manager = Pdm; _ }, Poetry_tool _ ->
-        Error Error.Invalid_resolution
+        Error (Error.Internal "installer does not match the install")
   in
   let* venv = run [ "python"; "-m"; "venv"; "/opt/venv" ] in
   let* commands =

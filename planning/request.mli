@@ -30,8 +30,6 @@ type t = private {
   build : Commands.t option;
   config_file : string;
   variables : Build_plan.environment option;
-  previous : Yojson.Basic.t option;
-  previous_versions : (string * string) list;
 }
 
 val decode : (string * Yojson.Basic.t) list -> (t, Kiln_core.Error.t) result
@@ -50,8 +48,7 @@ val configure : t -> Source.t -> (t, Kiln_core.Error.t) result
 
 val defaults :
   t -> string -> Package.requirement list -> Package.requirement list
-(** Environment version overrides replace declarations; previous versions are
-    used only when neither was supplied. *)
+(** Environment version overrides replace declarations. *)
 
 val install_commands :
   t -> Build_plan.operation list -> Build_plan.operation list

@@ -15,8 +15,6 @@ type t = {
   build : Commands.t option;
   config_file : string;
   variables : Build_plan.environment option;
-  previous : Yojson.Basic.t option;
-  previous_versions : (string * string) list;
 }
 
 let prefer value fallback =
@@ -89,15 +87,7 @@ let decode fields =
       fields
   in
   let config_file = Option.value ~default:config_file (config "CONFIG_FILE") in
-  let* provider = Json.field "provider" (Json.optional Json.string) fields in
-  let* previous_versions =
-    Json.field "previousVersions"
-      (Json.default [] (Json.assoc Json.string))
-      fields
-  in
-  let+ previous =
-    Json.field "resolution" (Json.optional (fun _ value -> Ok value)) fields
-  in
+  let+ provider = Json.field "provider" (Json.optional Json.string) fields in
   {
     source;
     environment;
@@ -111,8 +101,6 @@ let decode fields =
     build;
     config_file;
     variables = None;
-    previous;
-    previous_versions;
   }
 
 let build_command request default =
@@ -232,9 +220,4 @@ let defaults request name declarations =
           ("RAILPACK_" ^ String.uppercase_ascii name ^ "_VERSION")
           value;
       ]
-  | None -> (
-      match declarations with
-      | [] ->
-          Package.optional "previousVersions"
-            (List.assoc_opt name request.previous_versions)
-      | _ :: _ -> declarations)
+  | None -> declarations

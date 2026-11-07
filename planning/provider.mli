@@ -8,7 +8,7 @@ module type S = sig
   type resolution
 
   val id : string
-  (** Stable implementation identifier used for resolution reuse. *)
+  (** Stable implementation identifier. *)
 
   val public_name : string
   (** Public provider name used for requests and detected-provider metadata.
@@ -26,43 +26,23 @@ module type S = sig
       type. *)
 
   val startup : application -> Build_plan.argv option
-  (** Selected application startup, independent of toolchain discovery. [plan]
-      must emit this value as the final CMD. *)
+  (** Selected application startup, independent of the toolchain. [plan] must
+      emit this value as the final CMD. *)
 
-  val fingerprint : application -> string
-  (** Deterministic toolchain requirements key; source-only and startup edits
-      should not change it. *)
-
-  val resolve :
-    today:string ->
-    fetch:Registry.fetch ->
-    application ->
-    (resolution, Kiln_core.Error.t) result
-  (** Discover immutable toolchain pins for the application and requested
-      targets. *)
-
-  val decode : Yojson.Basic.t -> (resolution, Kiln_core.Error.t) result
-  (** Parse the provider-specific reusable resolution payload. *)
+  val resolve : application -> (resolution, Kiln_core.Error.t) result
+  (** Select immutable toolchain pins for the application. *)
 
   val encode : resolution -> Yojson.Basic.t
-  (** Serialize a resolution for a later [decode]. *)
+  (** Serialize a resolution for the plan's metadata. *)
 
   val packages : application -> resolution -> Package.t list
   (** Resolved versions together with the declarations that selected them. *)
 
   val metadata : application -> resolution -> (string * string) list
 
-  val legacy :
-    application ->
-    Yojson.Basic.t ->
-    (resolution option, Kiln_core.Error.t) result
-  (** Decode an unversioned resolution, returning [None] if its requirements no
-      longer match. Reject unsupported formats. *)
-
   val plan :
     application -> resolution -> (Build_plan.t, Kiln_core.Error.t) result
-  (** Generate a validated plan, rejecting resolutions incompatible with the
-      application. *)
+  (** Generate a validated plan. *)
 end
 
 type t = (module S)

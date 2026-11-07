@@ -2,21 +2,35 @@ module Planner = Kiln_planning.Planner
 module Error = Kiln_core.Error
 module Build_plan = Kiln_planning.Build_plan
 module Provider = Kiln_planning.Provider
+module Pins = Kiln_providers.Pins
+module Semver = Kiln_core.Semver
 open Contract_support
-open Node_fixture
 
 let providers : Provider.t list = [ (module Kiln_providers.Node) ]
+let ok' = Result.get_ok
 let base = {|{"main":"main.js"}|}
 let snapshot = snapshot [ ("package.json", base) ]
+let run root extras = Kiln_io.Driver.plan ~providers (request root extras)
 
-let run root ?(discovery = fetch) ?(today = "2026-10-11") extras =
-  Kiln_io.Driver.plan_with ~providers ~today ~fetch:discovery
-    (request root extras)
+let result root extras =
+  ok (Kiln_io.Driver.prepare ~providers (request root extras))
 
-let result root ?(discovery = fetch) ?(today = "2026-10-11") extras =
-  ok
-    (Kiln_io.Driver.prepare_with ~providers ~today ~fetch:discovery
-       (request root extras))
+let release pin = pin.Pins.node.Pins.release
+
+let default_pin =
+  last (List.filter (fun pin -> Option.is_some pin.Pins.lts) Pins.node)
+
+let oldest_pin = List.hd Pins.node
+let newest_pin = last Pins.node
+let major version = List.hd (String.split_on_char '.' version)
+
+(* The newest pinned manager a Node release can run. *)
+let compatible tools node =
+  let node = ok' (Semver.version node) in
+  last
+    (List.filter
+       (fun tool -> Semver.matches (ok' (Semver.range tool.Pins.engines)) node)
+       tools)
 
 let resolved prepared = prepared.Planner.resolution
 
@@ -55,15 +69,15 @@ let workspace root =
     ]
 
 let () =
-  (* Planning output and resolution reuse. *)
+  (* Planning output. *)
   snapshot "default npm plan" (fun root ->
       let plan =
         result root [ ("platforms", `List [ `String "linux/amd64" ]) ]
       in
-      check "default LTS" (uses_node "24.0.0" plan);
+      check "default LTS" (uses_node (release default_pin) plan);
       check "bundled npm"
         (selected "packageManager" plan = "npm"
-        && selected "packageManagerVersion" plan = "11.0.0");
+        && selected "packageManagerVersion" plan = default_pin.Pins.npm);
       let open Yojson.Basic.Util in
       let packages = `Assoc (Planner.info plan) |> member "resolvedPackages" in
       List.iter
@@ -115,32 +129,22 @@ let () =
       ( "pnpm stays under emulation",
         {|{"main":"main.js","packageManager":"pnpm@11.0.0"}|} );
     ];
-  snapshot "reuse and invalidation" (fun root ->
-      let initial = result root [] in
-      let reuse extras =
-        result root
-          ~discovery:(fun _ _ -> failwith "unexpected discovery")
-          ~today:"2040-01-01"
-          (("resolution", resolved initial) :: extras)
-      in
-      write root "main.js" "source edit";
-      check "source edits preserve the plan after EOL" (reuse [] = initial);
-      check "platforms are a set"
-        (reuse
-           [
-             ( "platforms",
-               `List
-                 [
-                   `String "linux/arm64";
-                   `String "linux/amd64";
-                   `String "linux/amd64";
-                 ] );
-           ]
-        = initial);
-      write root "package.json"
-        {|{"main":"main.js","engines":{"node":"^22.20"}}|};
-      check "requirements invalidate"
-        (uses_node "22.20.0" (result root [ ("resolution", resolved initial) ])));
+  List.iter
+    (fun pin ->
+      snapshot
+        ("Node " ^ release pin)
+        (fun root ->
+          write root ".nvmrc" (major (release pin));
+          let plan = result root [] in
+          check "the major selects its pin" (uses_node (release pin) plan);
+          check "the images are the pinned digests"
+            (selected "builderImage" plan = pin.Pins.node.Pins.builder
+            && selected "runtimeImage" plan = pin.Pins.node.Pins.runtime);
+          write root "pnpm-lock.yaml" "";
+          check "pnpm is the newest pin the release can run"
+            (selected "packageManagerVersion" (result root [])
+            = (compatible Pins.pnpm (release pin)).Pins.tool)))
+    Pins.node;
   List.iter
     (fun (pkg, node, manager, version) ->
       snapshot
@@ -153,12 +157,15 @@ let () =
             (selected "packageManager" plan = manager
             && selected "packageManagerVersion" plan = version)))
     [
-      ( {|{"main":"main.js","devEngines":{"runtime":{"name":"node","version":"^22"},"packageManager":[{"name":"npm","version":"~10.1"}]}}|},
-        "22.20.0",
+      ( Printf.sprintf
+          {|{"main":"main.js","devEngines":{"runtime":{"name":"node","version":"^%s"},"packageManager":[{"name":"npm","version":"%s"}]}}|}
+          (major (release oldest_pin))
+          (major (compatible Pins.npm (release oldest_pin)).Pins.tool),
+        release oldest_pin,
         "npm",
-        "10.1.0" );
+        (compatible Pins.npm (release oldest_pin)).Pins.tool );
       ( {|{"main":"main.js","packageManager":"pnpm@11.0.0"}|},
-        "24.0.0",
+        release default_pin,
         "pnpm",
         "11.0.0" );
     ];
@@ -172,14 +179,20 @@ let () =
     [
       ( "engine/file conflict",
         [
-          ("package.json", {|{"main":"main.js","engines":{"node":"^22.20"}}|});
-          (".node-version", "24");
+          ( "package.json",
+            Printf.sprintf {|{"main":"main.js","engines":{"node":"^%s"}}|}
+              (major (release oldest_pin)) );
+          (".node-version", major (release newest_pin));
         ],
-        "no supported stable Node" );
+        "no compatible Node" );
       ( "version-file conflict",
-        [ (".node-version", "22.20.0\n"); (".nvmrc", "24.0.0\n") ],
-        "no supported stable Node" );
-      ("EOL runtime", [ (".node-version", "20.19.0") ], "EOL");
+        [
+          (".node-version", release oldest_pin); (".nvmrc", release newest_pin);
+        ],
+        "no compatible Node" );
+      ( "unsupported runtime",
+        [ (".node-version", "20.19.0") ],
+        "supported: " ^ String.concat ", " (List.map release Pins.node) );
     ];
   List.iter
     (fun (pkg, message) ->
@@ -232,47 +245,36 @@ let () =
   (* Workspace configuration, startup, and lockfile handling. *)
   snapshot "workspace manifests and lockfile" (fun root ->
       workspace root;
-      let platforms = ("platforms", `List [ `String "linux/arm64" ]) in
-      let plan = result root [ platforms ] in
-      check "compatible nondeprecated pnpm"
+      let plan = result root [] in
+      check "compatible pnpm"
         (selected "packageManager" plan = "pnpm"
-        && selected "packageManagerVersion" plan = "10.1.0");
+        && selected "packageManagerVersion" plan
+           = (compatible Pins.pnpm (release default_pin)).Pins.tool);
       check "build script executed" (runs "pnpm run build" plan);
       check "manager startup" (startup plan = Some [ "pnpm"; "run"; "start" ]);
       write root "pnpm-lock.yaml" "lockfileVersion: '9.0'\n";
-      let frozen =
-        result root
-          ~discovery:(fun _ _ -> failwith "lockfile invalidated toolchain")
-          [ platforms; ("resolution", resolved plan) ]
-      in
       check "lockfile freezes installation"
-        (runs "pnpm install --frozen-lockfile" frozen));
+        (runs "pnpm install --frozen-lockfile" (result root [])));
+  snapshot "unsupported manager range" (fun root ->
+      write root "package.json" {|{"main":"main.js","packageManager":"pnpm@1"}|};
+      failure
+        ("supported: "
+        ^ String.concat ", " (List.map (fun tool -> tool.Pins.tool) Pins.pnpm))
+        (run root []));
   List.iter
     (fun (manager, version) ->
-      let node = "24.21.0" in
+      let node = release default_pin in
       snapshot
-        ("upstream " ^ manager ^ "@" ^ version)
+        ("exact " ^ manager ^ "@" ^ version)
         (fun root ->
           write root "package.json"
             (Printf.sprintf
                {|{"main":"main.js","engines":{"node":"%s"},"packageManager":"%s@%s"}|}
                node manager version);
-          let responses =
-            [
-              ( "https://nodejs.org/dist/index.json",
-                Printf.sprintf
-                  {|[{"version":"v%s","npm":"11.19.0","lts":"Krypton"}]|} node
-              );
-              ( "https://registry.npmjs.org/" ^ manager,
-                Printf.sprintf
-                  {|{"versions":{"%s":{"engines":{"node":">=24"}}}}|} version );
-            ]
-          in
-          let discovery = discovery responses in
-          let plan = result root ~discovery [] in
+          let plan = result root [] in
           List.iter
             (fun field ->
-              check ("upstream " ^ field)
+              check ("pinned " ^ field)
                 (String.starts_with ~prefix:"docker.io/library/node@sha256:"
                    (selected field plan)))
             [ "builderImage"; "runtimeImage" ];
@@ -286,61 +288,23 @@ let () =
             (Printf.sprintf
                {|{"main":"main.js","engines":{"node":"%s"},"packageManager":"%s@%s+sha256.%s"}|}
                node manager version hex);
-          let tarball =
-            "https://registry.npmjs.org/" ^ manager ^ "/-/" ^ manager ^ "-"
-            ^ version ^ ".tgz"
+          let dockerfile =
+            Build_plan.dockerfile (result root []).Planner.plan
           in
-          let verified =
-            result root
-              ~discovery:
-                (Node_fixture.discovery
-                   ((tarball, "package-manager-tarball") :: responses))
-              []
-          in
-          check "integrity-qualified manager is installed from verified bytes"
-            (contains
-               (Build_plan.dockerfile verified.Planner.plan)
-               (hex ^ "  /tmp/kiln-manager.tgz"));
-          failure "integrity does not match"
-            (run root
-               ~discovery:
-                 (Node_fixture.discovery ((tarball, "corrupt") :: responses))
-               [])))
-    [ ("npm", "11.19.0"); ("pnpm", "12.12.1") ];
-  (* Discovery verifies upstream data and honors cancellation. *)
-  List.iter
-    (fun (responses, message) ->
-      snapshot message (fun root ->
-          failure message (run root ~discovery:(discovery responses) [])))
-    [
-      ( List.map
-          (fun (url, _) ->
-            ( url,
-              {|{"manifests":[{"platform":{"os":"linux","architecture":"arm64"}}]}|}
-            ))
-          image_urls,
-        "lacks a requested target" );
-      ( [
-          ( "https://nodejs.org/dist/index.json",
-            {|[{"version":"v24.0.0","lts":"Krypton"}]|} );
-        ],
-        "missing its bundled npm" );
-    ];
-  List.iter
-    (fun before ->
-      snapshot
-        ("cancellation before discovery: " ^ string_of_bool before)
-        (fun root ->
-          let cancelled = ref before in
-          let fetch url token =
-            let response = fetch url token in
-            cancelled := true;
-            response
+          check "the build verifies an integrity-qualified manager"
+            (contains dockerfile (hex ^ "  /tmp/kiln-manager.tgz")
+            && contains dockerfile "sha256sum -c")))
+    [ ("npm", default_pin.Pins.npm); ("pnpm", "12.12.1") ];
+  snapshot "cancellation" (fun root ->
+      List.iter
+        (fun checks ->
+          let remaining = ref checks in
+          let cancelled () =
+            decr remaining;
+            !remaining < 0
           in
           check "cancelled planning cannot succeed"
-            (Kiln_io.Driver.plan_with ~providers ~today:"2026-10-11"
-               ~cancelled:(fun () -> !cancelled)
-               ~fetch (request root [])
-            = Error Error.Cancelled)))
-    [ true; false ];
+            (Kiln_io.Driver.plan ~providers ~cancelled (request root [])
+            = Error Error.Cancelled))
+        [ 0; 1 ]);
   finish ()

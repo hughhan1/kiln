@@ -11,6 +11,10 @@ val optional : string -> string option -> requirement list
 
 val versions : requirement list -> string list
 
+val no_version :
+  tool:string -> requirement list -> string list -> Kiln_core.Error.t
+(** The failure for declarations that no supported version satisfies. *)
+
 val resolve :
   ?default_source:string -> string -> requirement list -> string -> t
 (** Use [default_source] only when no version was requested. *)

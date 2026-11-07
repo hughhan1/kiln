@@ -6,8 +6,14 @@ val traverse : ('a -> ('b, 'e) result) -> 'a list -> ('b list, 'e) result
 val iter : ('a -> ('b, 'e) result) -> 'a list -> (unit, 'e) result
 (** Discard successful values and stop at the first error. *)
 
-val maximum : compare:('a -> 'a -> int) -> 'a list -> 'a option
-(** Greatest element under [compare], or [None] for an empty list. *)
+val select :
+  parse:('row -> ('version, 'e) result) ->
+  compare:('version -> 'version -> int) ->
+  accept:('version -> 'row -> bool) ->
+  none:'e ->
+  'row list ->
+  ('version * 'row, 'e) result
+(** The row with the greatest parsed version among those accepted, or [none]. *)
 
 val inside : string -> string -> bool
 (** Test equality or a directory-boundary prefix. Callers must canonicalize

@@ -1,15 +1,14 @@
 module Planner = Kiln_planning.Planner
 module Build_plan = Kiln_planning.Build_plan
+module Pins = Kiln_providers.Pins
 open Contract_support
 
-let fetch =
-  registry
-    [
-      ("denoland/deno", [ "1.46.3"; "2.4.3"; "2.5.1"; "2.6.0-rc.1"; "alpine" ]);
-    ]
+let pins = List.map (fun pin -> pin.Pins.version) Pins.deno
+let prepare root fields = Kiln_io.Driver.prepare (request root fields)
 
-let prepare ?(fetch = fetch) root fields =
-  Kiln_io.Driver.prepare_with ~today:"2026-10-12" ~fetch (request root fields)
+let version prepared =
+  Yojson.Basic.Util.(
+    prepared.Planner.resolution |> member "data" |> member "version")
 
 let () =
   snapshot
@@ -32,35 +31,19 @@ let () =
       check "Deno task startup"
         (Option.map Build_plan.arguments (Build_plan.startup first.Planner.plan)
         = Some [ "deno"; "task"; "start" ]);
-      check "stable Deno"
-        (Yojson.Basic.Util.(
-           first.Planner.resolution |> member "data" |> member "version")
-        = `String "2.5.1");
-      write root "deno.jsonc" {|{"tasks":{"start":"deno run other.ts"}}|};
-      let reused =
-        ok
-          (prepare
-             ~fetch:(fun _ _ -> failwith "offline discovery")
-             root
-             [ ("resolution", first.Planner.resolution) ])
-      in
-      check "startup preserves resolution"
-        (reused.Planner.resolution = first.Planner.resolution));
+      check "newest pin" (version first = `String (last pins)));
   snapshot
     [
       ("deno.json", {|{"tasks":{"start":"deno run main.ts"}}|});
-      (".deno-version", "2.4.3");
+      (".deno-version", List.hd pins);
     ]
-    "Deno exact version avoids tag discovery"
+    "Deno version file selects its pin"
     (fun root ->
-      ignore
-        (ok
-           (prepare
-              ~fetch:(fun url token ->
-                check "no catalog"
-                  (not (String.ends_with ~suffix:"tags/list" url));
-                fetch url token)
-              root [])));
+      check "selected pin"
+        (version (ok (prepare root [])) = `String (List.hd pins));
+      write root ".deno-version" "1.46.3";
+      check "an unsupported version lists what is supported"
+        (lists_supported (prepare root []) pins));
   List.iter
     (fun (label, bytes) ->
       snapshot

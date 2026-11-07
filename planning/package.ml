@@ -9,6 +9,14 @@ let optional source version =
 
 let versions requirements = List.map (fun r -> r.version) requirements
 
+let no_version ~tool requirements supported =
+  Kiln_core.Error.No_version
+    {
+      tool;
+      requirements = String.concat " && " (versions requirements);
+      supported;
+    }
+
 let resolve ?(default_source = "kiln default") name requirements resolved =
   let origin =
     match requirements with

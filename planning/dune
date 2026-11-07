@@ -1,6 +1,6 @@
 (library
  (name kiln_planning)
- (libraries kiln_core yojson digestif angstrom))
+ (libraries kiln_core yojson angstrom))
 
 (rule
  (target default_platform.ml)

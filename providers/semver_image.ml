@@ -1,7 +1,5 @@
 module Build_plan = Kiln_planning.Build_plan
-module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
-module Registry = Kiln_planning.Registry
 module Support = Kiln_planning.Support
 open Result.Syntax
 module Semver = Kiln_core.Semver
@@ -26,37 +24,24 @@ let requirements declarations =
   let+ ranges = Support.traverse (parse Semver.range) versions in
   { declarations; ranges }
 
-let fingerprint requirements =
-  Json.encode
-    (Json.string_array
-       (List.sort_uniq String.compare
-          (Package.versions requirements.declarations)))
-
 let image resolved = resolved.image
 
-let resolve ~fetch ~repository ~platforms ~accept requirements =
-  let version value = Result.to_option (Semver.version value) in
-  let* version =
-    Registry.select fetch ~repository
-      ~exact:
-        (List.find_map version (Package.versions requirements.declarations))
-      ~parse:version ~compare:Semver.compare
-      ~matches:(fun v ->
-        Semver.stable v && accept v
+let resolve ~tool ?(accept = fun _ -> true) ~pins requirements =
+  let* version, pin =
+    Support.select
+      ~parse:(fun pin -> parse Semver.version pin.Pins.version)
+      ~compare:Semver.compare
+      ~accept:(fun version _ ->
+        accept version
         && List.for_all
-             (fun range -> Semver.matches range v)
+             (fun range -> Semver.matches range version)
              requirements.ranges)
-      ~unavailable:
-        (Error.No_version
-           {
-             tool = repository;
-             requirements =
-               String.concat ", " (Package.versions requirements.declarations);
-           })
+      ~none:
+        (Package.no_version ~tool requirements.declarations
+           (List.map (fun pin -> pin.Pins.version) pins))
+      pins
   in
-  let+ image =
-    Registry.image fetch ~platforms ~repository (Semver.show version)
-  in
+  let+ image = Build_plan.image pin.Pins.image in
   { version; image }
 
 let encode resolved =
@@ -65,14 +50,6 @@ let encode resolved =
       ("version", `String (Semver.show resolved.version));
       ("image", `String (Build_plan.image_ref resolved.image));
     ]
-
-let decode value =
-  let* fields = Json.object_ "runtime resolution" value in
-  let* version =
-    Json.field "version" (Json.text (parse Semver.version)) fields
-  in
-  let+ image = Json.field "image" (Json.text Build_plan.image) fields in
-  { version; image }
 
 let version r = Semver.show r.version
 

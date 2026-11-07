@@ -3,17 +3,11 @@
  (modules contract_support)
  (libraries kiln_core unix yojson))
 
-(library
- (name node_fixture)
- (modules node_fixture)
- (libraries contract_support kiln_io yojson))
-
 (test
  (name planner)
  (modules planner)
  (libraries
   contract_support
-  node_fixture
   kiln_core
   kiln_planning
   kiln_providers
@@ -33,7 +27,6 @@
  (modules node)
  (libraries
   contract_support
-  node_fixture
   kiln_core
   kiln_planning
   kiln_providers
@@ -50,7 +43,19 @@
 (test
  (name bun)
  (modules bun)
- (libraries contract_support kiln_core kiln_planning kiln_io unix yojson))
+ (libraries
+  contract_support
+  kiln_core
+  kiln_planning
+  kiln_providers
+  kiln_io
+  unix
+  yojson))
+
+(test
+ (name pins)
+ (modules pins)
+ (libraries contract_support kiln_core kiln_planning kiln_providers))
 
 (test
  (name deno)

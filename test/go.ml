@@ -1,54 +1,47 @@
 module Planner = Kiln_planning.Planner
 module Build_plan = Kiln_planning.Build_plan
+module Pins = Kiln_providers.Pins
 open Contract_support
 
-let fetch =
-  registry
-    [
-      ("library/golang", [ "1.26.8"; "1.27.0"; "1.27.2"; "1.28.0" ]);
-      ("library/debian", [ "bookworm-slim" ]);
-    ]
+let pins = List.map (fun pin -> pin.Pins.version) Pins.golang
+let prepare root fields = Kiln_io.Driver.prepare (request root fields)
 
-let prepare ?(fetch = fetch) root fields =
-  Kiln_io.Driver.prepare_with ~today:"2026-10-20" ~fetch (request root fields)
+let compiler prepared =
+  Yojson.Basic.Util.(
+    prepared.Planner.resolution |> member "data" |> member "compiler"
+    |> member "version")
 
 let () =
+  List.iter
+    (fun pin ->
+      snapshot
+        [
+          ("go.mod", "module example\n\ngo " ^ pin ^ "\n");
+          ("server.go", "package main\nfunc main() {}");
+        ]
+        ("Go " ^ pin ^ " builds")
+        (fun root ->
+          let first = ok (prepare root []) in
+          check "Go selected"
+            (Yojson.Basic.Util.member "provider" first.Planner.resolution
+            = `String "go");
+          check "whole package startup"
+            (Option.map Build_plan.arguments
+               (Build_plan.startup first.Planner.plan)
+            = Some [ "/app/bin/server" ]);
+          check "the language version selects its patch line"
+            (compiler first = `String pin)))
+    pins;
+  let oldest = List.hd pins and newest = last pins in
   snapshot
     [
-      ("go.mod", "module example\n\ngo 1.27.0\n");
-      ("server.go", "package main\nfunc main() {}");
+      ( "go.mod",
+        "module example\ngo " ^ oldest ^ "\ntoolchain go" ^ newest ^ "\n" );
     ]
-    "Go package builds"
+    "an explicit toolchain selects its pin"
     (fun root ->
-      let first = ok (prepare root []) in
-      check "Go selected"
-        (Yojson.Basic.Util.member "provider" first.Planner.resolution
-        = `String "go");
-      check "whole package startup"
-        (Option.map Build_plan.arguments (Build_plan.startup first.Planner.plan)
-        = Some [ "/app/bin/server" ]);
-      check "latest matching patch"
-        (Yojson.Basic.Util.(
-           first.Planner.resolution |> member "data" |> member "compiler"
-           |> member "version")
-        = `String "1.27.2");
-      write root "helper.go" "package main\nconst message = \"hello\"\n";
-      let reused =
-        ok
-          (prepare
-             ~fetch:(fun _ _ -> failwith "offline discovery")
-             root
-             [ ("resolution", first.Planner.resolution) ])
-      in
-      check "source edits retain toolchain resolution"
-        (reused.Planner.resolution = first.Planner.resolution);
-      write root "go.mod" "module example\ngo 1.27.0\ntoolchain go1.28.0\n";
-      let upgraded = ok (prepare root []) in
       check "explicit toolchain"
-        (Yojson.Basic.Util.(
-           upgraded.Planner.resolution |> member "data" |> member "compiler"
-           |> member "version")
-        = `String "1.28.0"));
+        (compiler (ok (prepare root [])) = `String newest));
   List.iter
     (fun (label, files) ->
       snapshot files label (fun root ->
@@ -59,6 +52,10 @@ let () =
         [ ("go.mod", "module example\ngo 1.27\n"); ("go.work", "go 1.27\n") ] );
       ("missing Go version", [ ("go.mod", "module example\n") ]);
       ( "toolchain below language minimum",
-        [ ("go.mod", "module example\ngo 1.28\ntoolchain go1.27.2\n") ] );
+        [
+          ( "go.mod",
+            "module example\ngo " ^ newest ^ "\ntoolchain go" ^ oldest ^ "\n" );
+        ] );
+      ("unsupported Go", [ ("go.mod", "module example\ngo 1.2.3\n") ]);
     ];
   finish ()

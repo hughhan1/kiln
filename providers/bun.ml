@@ -1,7 +1,6 @@
 module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
-module Platforms = Kiln_planning.Platforms
 module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
@@ -28,7 +27,6 @@ let detect source =
     else Provider.No_match
 
 type application = {
-  platforms : Platforms.t;
   requirements : Semver_image.requirements;
   install : Build_plan.argv;
   install_commands : Build_plan.operation list -> Build_plan.operation list;
@@ -77,7 +75,6 @@ let load request source =
       else [])
   in
   {
-    platforms = request.Request.platforms;
     requirements;
     install;
     install_commands = Request.install_commands request;
@@ -88,16 +85,11 @@ let load request source =
   }
 
 let startup app = app.start
-let fingerprint app = Semver_image.fingerprint app.requirements
 
-let resolve ~today:_ ~fetch app =
-  Semver_image.resolve ~fetch ~repository:"oven/bun" ~platforms:app.platforms
-    ~accept:(fun _ -> true)
-    app.requirements
+let resolve app =
+  Semver_image.resolve ~tool:"Bun" ~pins:Pins.bun app.requirements
 
 let encode = Semver_image.encode
-let decode = Semver_image.decode
-let legacy _ _ = Error Error.Invalid_resolution
 
 let plan app resolved =
   let open Build_plan in
