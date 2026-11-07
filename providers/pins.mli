@@ -1,0 +1,28 @@
+(** Toolchain versions and image digests Kiln selects from, oldest first in each
+    table. [scripts/bump-pins] regenerates the implementation with each release.
+*)
+
+type image = { version : string; image : string }
+type toolchain = { release : string; builder : string; runtime : string }
+type node = { node : toolchain; npm : string; lts : string option }
+type tool = { tool : string; engines : string }
+
+val node : node list
+(** Node releases in their support window, one per major, with bundled npm. *)
+
+val npm : tool list
+(** npm releases, with the Node range each supports. *)
+
+val pnpm : tool list
+(** pnpm releases, with the Node range each supports. *)
+
+val python : toolchain list
+(** Python releases, one per minor, on Debian trixie. *)
+
+val uv : image list
+val bun : image list
+val deno : image list
+val golang : image list
+
+val debian : string
+(** Debian bookworm-slim, the runtime for Go binaries. *)
