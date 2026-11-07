@@ -10,9 +10,6 @@ val version : string -> (version, Kiln_core.Error.t) result
 val show : version -> string
 (** Canonical three-component release string. *)
 
-val compare : version -> version -> int
-(** Numeric release ordering. *)
-
 val specifier : string -> (requirement list, Kiln_core.Error.t) result
 (** Parse comma-separated comparisons, equality wildcards, and
     compatible-release constraints; an empty specifier imposes no constraints.

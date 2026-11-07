@@ -11,9 +11,16 @@ val optional : string -> string option -> requirement list
 
 val versions : requirement list -> string list
 
-val no_version :
-  tool:string -> requirement list -> string list -> Kiln_core.Error.t
-(** The failure for declarations that no supported version satisfies. *)
+val select :
+  tool:string ->
+  declarations:requirement list ->
+  version:('row -> string) ->
+  parse:(string -> ('version, Kiln_core.Error.t) result) ->
+  accept:('version -> 'row -> bool) ->
+  'row list ->
+  ('version * 'row, Kiln_core.Error.t) result
+(** The newest accepted row of a table ordered oldest first. Otherwise fail
+    naming the declarations and every version the table supports. *)
 
 val resolve :
   ?default_source:string -> string -> requirement list -> string -> t

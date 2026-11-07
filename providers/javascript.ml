@@ -14,8 +14,6 @@ let algorithm = function
   | `SHA384 -> "sha384"
   | `SHA512 -> "sha512"
 
-let integrity_text (Integrity (kind, hex)) = algorithm kind ^ "." ^ hex
-
 let integrity value =
   let* kind, hex =
     match String.split_on_char '.' value with

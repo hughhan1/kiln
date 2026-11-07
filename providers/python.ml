@@ -7,7 +7,6 @@ module Source = Kiln_planning.Source
 module Support = Kiln_planning.Support
 open Result.Syntax
 module Environment = Kiln_planning.Environment
-module Error = Kiln_core.Error
 module Version = Python_version
 module Toml = Python_toml
 
@@ -43,13 +42,15 @@ let detect source =
      else if Source.has source "main.py" then Provider.Fallback
      else Provider.No_match)
 
+type uv = { version : Version.version; image : Build_plan.image }
+
 type install =
   | Pip_install of {
       requirements : bool;
       project : bool;
       dependencies : string list;
     }
-  | Uv_install of Version.requirement list
+  | Uv_install of uv
   | Manager_install of {
       manager : manager;
       version : Version.version;
@@ -58,6 +59,8 @@ type install =
     }
 
 and manager = Poetry | Pdm
+
+let manager_name = function Poetry -> "poetry" | Pdm -> "pdm"
 
 type inputs = Whole_source | Manifests of string list
 
@@ -76,20 +79,11 @@ type application = {
   install_override : Build_plan.argv option;
 }
 
-type uv = { version : Version.version; image : Build_plan.image }
-type manager_tool = { tool_version : Version.version }
-
-type installer =
-  | Pip
-  | Uv of uv
-  | Poetry_tool of manager_tool
-  | Pdm_tool of manager_tool
-
 type resolution = {
   python : Version.version;
   builder : Build_plan.image;
   runtime : Build_plan.image;
-  installer : installer;
+  installer : install;
 }
 
 let pip_arguments ~requirements ~dependencies =
@@ -148,7 +142,7 @@ let manager_selection source root =
   | [] -> Ok (declared, false)
 
 let manager_declarations request manager =
-  let name = match manager with Poetry -> "poetry" | Pdm -> "pdm" in
+  let name = manager_name manager in
   let declarations = Request.defaults request name [] in
   let fallback = match manager with Poetry -> "2.5.1" | Pdm -> "2.29.5" in
   let* version =
@@ -430,8 +424,17 @@ let load request source =
         if not (Source.has source "pyproject.toml") then
           Json.metadata "uv.lock" "requires pyproject.toml"
         else
-          let+ requirements = Support.traverse parse_uv uv_requirements in
-          Uv_install (List.concat requirements)
+          let* requirements = Support.traverse parse_uv uv_requirements in
+          let requirements = List.concat requirements in
+          let* version, pin =
+            Package.select ~tool:"uv" ~declarations:uv_declarations
+              ~version:(fun pin -> pin.Pins.version)
+              ~parse:Version.version
+              ~accept:(fun version _ -> Version.matches requirements version)
+              Pins.uv
+          in
+          let+ image = Build_plan.image pin.Pins.image in
+          Uv_install { version; image }
   in
   let* uv_package =
     Toml.field root [ "tool"; "uv"; "package" ] (Otoml.get_boolean ~strict:true)
@@ -506,76 +509,43 @@ let load request source =
       build = Request.build_command request None;
     }
 
-let startup app = app.start
-
 let resolve app =
   let* python, toolchain =
-    Support.select
-      ~parse:(fun pin -> Version.version pin.Pins.release)
-      ~compare:Version.compare
+    Package.select ~tool:"Python" ~declarations:app.python_declarations
+      ~version:(fun pin -> pin.Pins.release)
+      ~parse:Version.version
       ~accept:(fun version _ -> Version.matches app.requirements version)
-      ~none:
-        (Package.no_version ~tool:"Python" app.python_declarations
-           (List.map (fun pin -> pin.Pins.release) Pins.python))
       Pins.python
   in
   let* builder = Build_plan.image toolchain.Pins.builder in
-  let* runtime = Build_plan.image toolchain.Pins.runtime in
-  let+ installer =
-    match app.install with
-    | Pip_install _ -> Ok Pip
-    | Uv_install requirements ->
-        let* version, pin =
-          Support.select
-            ~parse:(fun pin -> Version.version pin.Pins.version)
-            ~compare:Version.compare
-            ~accept:(fun version _ -> Version.matches requirements version)
-            ~none:
-              (Package.no_version ~tool:"uv" app.uv_declarations
-                 (List.map (fun pin -> pin.Pins.version) Pins.uv))
-            Pins.uv
-        in
-        let+ image = Build_plan.image pin.Pins.image in
-        Uv { version; image }
-    | Manager_install { manager = Poetry; version; _ } ->
-        Ok (Poetry_tool { tool_version = version })
-    | Manager_install { manager = Pdm; version; _ } ->
-        Ok (Pdm_tool { tool_version = version })
-  in
-  { python; builder; runtime; installer }
+  let+ runtime = Build_plan.image toolchain.Pins.runtime in
+  { python; builder; runtime; installer = app.install }
 
 let encode resolved =
-  let installer =
-    match resolved.installer with
-    | Pip -> `Assoc [ ("name", `String "pip") ]
-    | Uv uv ->
-        `Assoc
-          [
-            ("name", `String "uv");
-            ("version", `String (Version.show uv.version));
-            ("image", `String (Build_plan.image_ref uv.image));
-          ]
-    | Poetry_tool tool | Pdm_tool tool ->
-        `Assoc
-          [
-            ( "name",
-              `String
-                (match resolved.installer with
-                | Poetry_tool _ -> "poetry"
-                | Pdm_tool _ -> "pdm"
-                | Pip | Uv _ -> assert false) );
-            ("version", `String (Version.show tool.tool_version));
-          ]
-  in
   `Assoc
     [
       ("python", `String (Version.show resolved.python));
       ("builder", `String (Build_plan.image_ref resolved.builder));
       ("runtime", `String (Build_plan.image_ref resolved.runtime));
-      ("installer", installer);
+      ( "installer",
+        `Assoc
+          (match resolved.installer with
+          | Pip_install _ -> [ ("name", `String "pip") ]
+          | Uv_install uv ->
+              [
+                ("name", `String "uv");
+                ("version", `String (Version.show uv.version));
+                ("image", `String (Build_plan.image_ref uv.image));
+              ]
+          | Manager_install { manager; version; _ } ->
+              [
+                ("name", `String (manager_name manager));
+                ("version", `String (Version.show version));
+              ]) );
     ]
 
-let manager_setup app resolved name version checks install =
+let manager_setup app resolved manager version checks install =
+  let name = manager_name manager in
   match app.install_override with
   | Some _ -> Ok ([], [], [])
   | None ->
@@ -595,18 +565,17 @@ let manager_setup app resolved name version checks install =
         List.map (fun args -> name :: args) (checks @ [ install ])
       in
       let env_values =
-        match name with
-        | "poetry" ->
+        match manager with
+        | Poetry ->
             [
               ("POETRY_VIRTUALENVS_CREATE", "false");
               ("POETRY_VIRTUALENVS_IN_PROJECT", "false");
             ]
-        | "pdm" ->
+        | Pdm ->
             [
               ("PDM_PYTHON", "/opt/venv/bin/python");
               ("PDM_IGNORE_SAVED_PYTHON", "1");
             ]
-        | _ -> []
       in
       Ok
         ( [ copy tools [ "/opt/kiln-tools/" ] "/opt/kiln-tools/" ],
@@ -657,8 +626,8 @@ let compile_venv =
 let plan app resolved =
   let open Build_plan in
   let* setup, defaults, manager_environment =
-    match (app.install, resolved.installer) with
-    | Pip_install install, Pip ->
+    match app.install with
+    | Pip_install install ->
         let pip args =
           [ "python"; "-m"; "pip"; "install"; "--no-cache-dir" ] @ args
         in
@@ -680,7 +649,7 @@ let plan app resolved =
               ]
         in
         Ok ([], defaults, [])
-    | Uv_install _, Uv uv ->
+    | Uv_install uv ->
         let* uv_stage = stage (Image uv.image) [] in
         let* env =
           environment
@@ -699,25 +668,16 @@ let plan app resolved =
           ( [ copy uv_stage [ "/uv" ] "/usr/local/bin/uv"; Env env ],
             defaults,
             [] )
-    | ( Manager_install { manager = Poetry; lock; install_root; version = _ },
-        Poetry_tool tool ) ->
-        manager_setup app resolved "poetry" tool.tool_version
+    | Manager_install { manager = Poetry; version; lock; install_root } ->
+        manager_setup app resolved Poetry version
           (if lock then [ [ "check"; "--lock" ] ] else [])
           ([ "install"; "--only"; "main"; "--no-interaction"; "--no-ansi" ]
           @ if install_root then [] else [ "--no-root" ])
-    | ( Manager_install { manager = Pdm; lock; install_root; version = _ },
-        Pdm_tool tool ) ->
-        manager_setup app resolved "pdm" tool.tool_version []
+    | Manager_install { manager = Pdm; version; lock; install_root } ->
+        manager_setup app resolved Pdm version []
           ([ "install"; "--prod"; "--no-editable" ]
           @ (if lock then [ "--check" ] else [])
           @ if install_root then [] else [ "--no-self" ])
-    | Pip_install _, Uv _
-    | Uv_install _, Pip
-    | (Pip_install _ | Uv_install _), (Poetry_tool _ | Pdm_tool _)
-    | Manager_install _, (Pip | Uv _)
-    | Manager_install { manager = Poetry; _ }, Pdm_tool _
-    | Manager_install { manager = Pdm; _ }, Poetry_tool _ ->
-        Error (Error.Internal "installer does not match the install")
   in
   let* venv = run [ "python"; "-m"; "venv"; "/opt/venv" ] in
   let* commands =
@@ -902,18 +862,13 @@ let packages app r =
   Package.resolve "python" app.python_declarations (Version.show r.python)
   ::
   (match r.installer with
-  | Pip -> []
-  | Uv uv ->
+  | Pip_install _ -> []
+  | Uv_install uv ->
       [ Package.resolve "uv" app.uv_declarations (Version.show uv.version) ]
-  | Poetry_tool tool ->
+  | Manager_install { manager; version; _ } ->
       [
-        Package.resolve "poetry" app.manager_declarations
-          (Version.show tool.tool_version);
-      ]
-  | Pdm_tool tool ->
-      [
-        Package.resolve "pdm" app.manager_declarations
-          (Version.show tool.tool_version);
+        Package.resolve (manager_name manager) app.manager_declarations
+          (Version.show version);
       ])
 
 let metadata app _ =
@@ -927,6 +882,5 @@ let metadata app _ =
       match app.install with
       | Pip_install _ -> "pip"
       | Uv_install _ -> "uv"
-      | Manager_install { manager = Poetry; _ } -> "poetry"
-      | Manager_install { manager = Pdm; _ } -> "pdm" );
+      | Manager_install { manager; _ } -> manager_name manager );
   ]

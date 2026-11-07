@@ -7,36 +7,9 @@ type tool = { tool : string; engines : string }
 
 let node =
   [
-    {
-      node =
-        {
-          release = "22.23.4";
-          builder = "docker.io/library/node@sha256:7702d8aa4d5910871692af4480eb3ba86f23047a6417a44d857d06c95d060d3f";
-          runtime = "docker.io/library/node@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d";
-        };
-      npm = "10.9.9";
-      lts = Some "jod";
-    };
-    {
-      node =
-        {
-          release = "24.22.2";
-          builder = "docker.io/library/node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40";
-          runtime = "docker.io/library/node@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9";
-        };
-      npm = "11.19.1";
-      lts = Some "krypton";
-    };
-    {
-      node =
-        {
-          release = "26.13.0";
-          builder = "docker.io/library/node@sha256:a546d3f8acd2af4382668a7e6acd3bc4418e6a27478373e3246f8162f5181509";
-          runtime = "docker.io/library/node@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68";
-        };
-      npm = "11.20.0";
-      lts = Some "lithium";
-    };
+    { node = { release = "22.23.4"; builder = "docker.io/library/node@sha256:7702d8aa4d5910871692af4480eb3ba86f23047a6417a44d857d06c95d060d3f"; runtime = "docker.io/library/node@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d" }; npm = "10.9.9"; lts = Some "jod" };
+    { node = { release = "24.22.2"; builder = "docker.io/library/node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40"; runtime = "docker.io/library/node@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9" }; npm = "11.19.1"; lts = Some "krypton" };
+    { node = { release = "26.13.0"; builder = "docker.io/library/node@sha256:a546d3f8acd2af4382668a7e6acd3bc4418e6a27478373e3246f8162f5181509"; runtime = "docker.io/library/node@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68" }; npm = "11.20.0"; lts = Some "lithium" };
   ]
 
 let npm =
@@ -55,31 +28,11 @@ let pnpm =
 
 let python =
   [
-    {
-      release = "3.11.18";
-      builder = "docker.io/library/python@sha256:0859a1cf34fe67ad1c91eb5c63b5846be0888e41f96906db7e0efc64a24e7105";
-      runtime = "docker.io/library/python@sha256:65bd3d9f1d7fa268dd1909973ba7eb4bdf41f6dcf2cfbe76ba9528b170f3fd79";
-    };
-    {
-      release = "3.12.16";
-      builder = "docker.io/library/python@sha256:271e78638e5d4e8aeeeb4c1e72cb40c56be3add83a92eaa99b7aab83955121c0";
-      runtime = "docker.io/library/python@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54";
-    };
-    {
-      release = "3.13.18";
-      builder = "docker.io/library/python@sha256:51db6babcbd039687e5362a676db5444b5926739abb03b10c8c6a8144872611f";
-      runtime = "docker.io/library/python@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc";
-    };
-    {
-      release = "3.14.10";
-      builder = "docker.io/library/python@sha256:8e4ff723e809a8e3bbd61bdceb92e9031689ad11edccff3306c0b3ebe60704ff";
-      runtime = "docker.io/library/python@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d";
-    };
-    {
-      release = "3.15.2";
-      builder = "docker.io/library/python@sha256:2a01fe7b84cc646c76d6fe8c8c216aef39de2617ad2723ed488e7c4f495a9539";
-      runtime = "docker.io/library/python@sha256:e97b88e416c3c01eb427b21fd8cd3ebf006e6ee38afcfcc3cae1c54ee2ab0a75";
-    };
+    { release = "3.11.18"; builder = "docker.io/library/python@sha256:0859a1cf34fe67ad1c91eb5c63b5846be0888e41f96906db7e0efc64a24e7105"; runtime = "docker.io/library/python@sha256:65bd3d9f1d7fa268dd1909973ba7eb4bdf41f6dcf2cfbe76ba9528b170f3fd79" };
+    { release = "3.12.16"; builder = "docker.io/library/python@sha256:271e78638e5d4e8aeeeb4c1e72cb40c56be3add83a92eaa99b7aab83955121c0"; runtime = "docker.io/library/python@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54" };
+    { release = "3.13.18"; builder = "docker.io/library/python@sha256:51db6babcbd039687e5362a676db5444b5926739abb03b10c8c6a8144872611f"; runtime = "docker.io/library/python@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc" };
+    { release = "3.14.10"; builder = "docker.io/library/python@sha256:8e4ff723e809a8e3bbd61bdceb92e9031689ad11edccff3306c0b3ebe60704ff"; runtime = "docker.io/library/python@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d" };
+    { release = "3.15.2"; builder = "docker.io/library/python@sha256:2a01fe7b84cc646c76d6fe8c8c216aef39de2617ad2723ed488e7c4f495a9539"; runtime = "docker.io/library/python@sha256:e97b88e416c3c01eb427b21fd8cd3ebf006e6ee38afcfcc3cae1c54ee2ab0a75" };
   ]
 
 let uv =

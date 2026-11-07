@@ -25,10 +25,6 @@ module type S = sig
   (** Parse manifests and request overrides into the provider's application
       type. *)
 
-  val startup : application -> Build_plan.argv option
-  (** Selected application startup, independent of the toolchain. [plan] must
-      emit this value as the final CMD. *)
-
   val resolve : application -> (resolution, Kiln_core.Error.t) result
   (** Select immutable toolchain pins for the application. *)
 

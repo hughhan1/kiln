@@ -112,8 +112,6 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
       start;
     }
 
-let startup app = app.start
-
 let resolve app =
   let* compiler =
     Semver_image.resolve ~tool:"Go"

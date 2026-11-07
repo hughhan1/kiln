@@ -231,9 +231,9 @@ let interpret (request : Request.t) (snapshot : snapshot) =
 
 (* The default is the newest LTS release; EOL lines never enter the pins. *)
 let select_node app =
-  Support.select
-    ~parse:(fun release -> parse_version release.Pins.node.Pins.release)
-    ~compare:Semver.compare
+  Package.select ~tool:"Node" ~declarations:app.node_declarations
+    ~version:(fun release -> release.Pins.node.Pins.release)
+    ~parse:parse_version
     ~accept:(fun version release ->
       let lts = release.Pins.lts in
       (app.nodes <> [] || Option.is_some lts)
@@ -244,9 +244,6 @@ let select_node app =
              | Lts (Some name) -> lts = Some name
              | Range range -> Semver.matches range version)
            app.nodes)
-    ~none:
-      (Package.no_version ~tool:"Node" app.node_declarations
-         (List.map (fun release -> release.Pins.node.Pins.release) Pins.node))
     Pins.node
 
 (* npm installs a manager at build time, so an exact declaration needs no pin. *)
@@ -260,27 +257,21 @@ let select_manager app node =
   with
   | Some version when allowed version -> Ok version
   | Some _ | None ->
-      let tools =
-        match app.manager with Npm -> Pins.npm | Pnpm -> Pins.pnpm
-      in
-      let+ (version, _), _ =
-        Support.select
-          ~parse:(fun tool ->
-            let* version = parse_version tool.Pins.tool in
+      let* tools =
+        Support.traverse
+          (fun tool ->
             let+ engines = parse_range tool.Pins.engines in
-            (version, engines))
-          ~compare:(fun (a, _) (b, _) -> Semver.compare a b)
-          ~accept:(fun (version, engines) _ ->
+            (tool.Pins.tool, engines))
+          (match app.manager with Npm -> Pins.npm | Pnpm -> Pins.pnpm)
+      in
+      let+ version, _ =
+        Package.select ~tool:(name app.manager)
+          ~declarations:
+            (app.manager_declarations
+            @ [ Package.require "Node" ("Node " ^ Semver.show node) ])
+          ~version:fst ~parse:parse_version
+          ~accept:(fun version (_, engines) ->
             allowed version && Semver.matches engines node)
-          ~none:
-            (Error.No_version
-               {
-                 tool = name app.manager;
-                 requirements =
-                   String.concat " && "
-                     (declared @ [ "Node " ^ Semver.show node ]);
-                 supported = List.map (fun tool -> tool.Pins.tool) tools;
-               })
           tools
       in
       version
@@ -475,8 +466,6 @@ let load request source =
       workspace;
       source_links = source.Source.links;
     }
-
-let startup app = app.command
 
 let packages app r =
   [

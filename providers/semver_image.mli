@@ -22,8 +22,5 @@ val resolve :
 val encode : t -> Yojson.Basic.t
 (** Serialize version and image pin. *)
 
-val version : t -> string
-(** Canonical resolved version text. *)
-
 val package : string -> requirements -> t -> Kiln_planning.Package.t
 (** Report the selected version with its original declarations. *)

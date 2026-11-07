@@ -23,7 +23,7 @@ registry() {
 
 # The digest-pinned reference of a tag that every Kiln target can pull.
 image() {
-  registry "$1" "manifests/$2" > "$stage/index"
+  registry "$1" "manifests/$2" > "$stage/index" || die "cannot fetch $1:$2"
   jq -e '[.manifests[].platform | .os + "/" + .architecture] | contains(["linux/amd64", "linux/arm64"])' \
     "$stage/index" > /dev/null || die "$1:$2 lacks linux/amd64 or linux/arm64"
   echo "docker.io/$1@sha256:$(sha256sum "$stage/index" | cut -d' ' -f1)"
@@ -33,102 +33,82 @@ image() {
 newest_minors() {
   jq -Rrn --argjson count "$1" '
     [inputs | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) | split(".") | map(tonumber)]
-    | group_by(.[:2]) | map(max) | sort | .[-$count:][] | map(tostring) | join(".")'
+    | group_by(.[:2]) | map(max) | .[-$count:][] | map(tostring) | join(".")'
 }
 
-image_table() {
-  local version pinned
+# Wraps the rows on stdin in a named list.
+table() {
   echo "let $1 ="
   echo "  ["
-  registry "$2" tags/list | jq -r '.tags[]' | newest_minors "$3" > "$stage/versions"
-  while read -r version; do
-    pinned=$(image "$2" "$version")
-    echo "    { version = \"$version\"; image = \"$pinned\" };"
-  done < "$stage/versions"
+  cat
   echo "  ]"
   echo
+}
+
+# Prints a toolchain record for repository $1, version $2, and builder and
+# runtime tag suffixes $3 and $4.
+toolchain() {
+  local builder runtime
+  builder=$(image "$1" "$2$3")
+  runtime=$(image "$1" "$2$4")
+  printf '{ release = "%s"; builder = "%s"; runtime = "%s" }' "$2" "$builder" "$runtime"
+}
+
+image_rows() {
+  local version pinned
+  registry "$1" tags/list | jq -r '.tags[]' | newest_minors "$2" | while read -r version; do
+    pinned=$(image "$1" "$version")
+    echo "    { version = \"$version\"; image = \"$pinned\" };"
+  done
 }
 
 # The newest stable release of each of the three newest majors, oldest first.
-manager_table() {
-  echo "let $1 ="
-  echo "  ["
-  fetch "https://registry.npmjs.org/$1" | jq -r '
+manager_rows() {
+  fetch -H 'Accept: application/vnd.npm.install-v1+json' "https://registry.npmjs.org/$1" | jq -r '
     [.versions | to_entries[]
      | select((.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and (.value.deprecated == null))
      | {parts: (.key | split(".") | map(tonumber)), key, engines: (.value.engines.node? // "*")}]
-    | group_by(.parts[0]) | map(max_by(.parts)) | sort_by(.parts) | .[-3:][]
+    | group_by(.parts[0]) | map(max_by(.parts)) | .[-3:][]
     | "    { tool = \"\(.key)\"; engines = \"\(.engines)\" };"'
-  echo "  ]"
-  echo
 }
 
 # Every Node major inside its support window today, oldest first.
-node_table() {
-  local version npm lts builder runtime
-  fetch https://nodejs.org/dist/index.json > "$stage/releases"
+node_rows() {
+  local version npm lts
   fetch https://raw.githubusercontent.com/nodejs/Release/main/schedule.json > "$stage/schedule"
-  echo "let node ="
-  echo "  ["
-  jq -r --arg today "$(date -u +%F)" --slurpfile schedule "$stage/schedule" '
+  fetch https://nodejs.org/dist/index.json | jq -r --arg today "$(date -u +%F)" --slurpfile schedule "$stage/schedule" '
     ($schedule[0] | to_entries | map(select(.value.start <= $today and $today < .value.end) | .key)) as $majors
     | [.[] | . + {major: (.version | split(".")[0])} | select(.major | IN($majors[]))]
     | group_by(.major | ltrimstr("v") | tonumber)[] | .[0]
-    | [(.version | ltrimstr("v")), .npm, (.lts | if . then ascii_downcase else "" end)] | @tsv' \
-    "$stage/releases" > "$stage/nodes"
-  while IFS=$'\t' read -r version npm lts; do
-    builder=$(image library/node "$version-bookworm")
-    runtime=$(image library/node "$version-bookworm-slim")
-    echo "    {"
-    echo "      node ="
-    echo "        {"
-    echo "          release = \"$version\";"
-    echo "          builder = \"$builder\";"
-    echo "          runtime = \"$runtime\";"
-    echo "        };"
-    echo "      npm = \"$npm\";"
-    if [ -n "$lts" ]; then
-      echo "      lts = Some \"$lts\";"
-    else
-      echo "      lts = None;"
-    fi
-    echo "    };"
-  done < "$stage/nodes"
-  echo "  ]"
-  echo
+    | [(.version | ltrimstr("v")), .npm, (.lts | if . then "Some \"\(ascii_downcase)\"" else "None" end)] | @tsv' |
+    while IFS=$'\t' read -r version npm lts; do
+      printf '    { node = '
+      toolchain library/node "$version" -bookworm -bookworm-slim
+      printf '; npm = "%s"; lts = %s };\n' "$npm" "$lts"
+    done
 }
 
-python_table() {
-  local version builder runtime
-  echo "let python ="
-  echo "  ["
-  registry library/python tags/list | jq -r '.tags[]' | sed -n 's/-trixie$//p' | newest_minors 5 > "$stage/pythons"
-  while read -r version; do
-    builder=$(image library/python "$version-trixie")
-    runtime=$(image library/python "$version-slim-trixie")
-    echo "    {"
-    echo "      release = \"$version\";"
-    echo "      builder = \"$builder\";"
-    echo "      runtime = \"$runtime\";"
-    echo "    };"
-  done < "$stage/pythons"
-  echo "  ]"
-  echo
+python_rows() {
+  local version
+  registry library/python tags/list | jq -r '.tags[]' | sed -n 's/-trixie$//p' | newest_minors 5 | while read -r version; do
+    printf '    '
+    toolchain library/python "$version" -trixie -slim-trixie
+    echo ';'
+  done
 }
 
 {
   echo '(* Generated by scripts/bump-pins. Do not edit. *)'
   echo
-  sed -n '/^type/,/^$/p' providers/pins.mli | sed '/^$/d;/^ *(\*\*/d'
-  echo
-  node_table
-  manager_table npm
-  manager_table pnpm
-  python_table
-  image_table uv astral/uv 3
-  image_table bun oven/bun 3
-  image_table deno denoland/deno 3
-  image_table golang library/golang 3
+  sed -n '/^type/,/^$/p' providers/pins.mli
+  node_rows | table node
+  manager_rows npm | table npm
+  manager_rows pnpm | table pnpm
+  python_rows | table python
+  image_rows astral/uv 3 | table uv
+  image_rows oven/bun 3 | table bun
+  image_rows denoland/deno 3 | table deno
+  image_rows library/golang 3 | table golang
   debian=$(image library/debian bookworm-slim)
   echo "let debian = \"$debian\""
 } > "$stage/pins.ml"

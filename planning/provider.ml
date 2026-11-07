@@ -12,7 +12,6 @@ module type S = sig
   val exclude : string list
   val detect : Source.t -> (detection, Error.t) result
   val load : Request.t -> Source.t -> (application, Error.t) result
-  val startup : application -> Build_plan.argv option
   val resolve : application -> (resolution, Error.t) result
   val encode : resolution -> Yojson.Basic.t
   val packages : application -> resolution -> Package.t list

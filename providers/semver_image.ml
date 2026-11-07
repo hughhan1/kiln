@@ -28,17 +28,14 @@ let image resolved = resolved.image
 
 let resolve ~tool ?(accept = fun _ -> true) ~pins requirements =
   let* version, pin =
-    Support.select
-      ~parse:(fun pin -> parse Semver.version pin.Pins.version)
-      ~compare:Semver.compare
+    Package.select ~tool ~declarations:requirements.declarations
+      ~version:(fun pin -> pin.Pins.version)
+      ~parse:(parse Semver.version)
       ~accept:(fun version _ ->
         accept version
         && List.for_all
              (fun range -> Semver.matches range version)
              requirements.ranges)
-      ~none:
-        (Package.no_version ~tool requirements.declarations
-           (List.map (fun pin -> pin.Pins.version) pins))
       pins
   in
   let+ image = Build_plan.image pin.Pins.image in
@@ -51,7 +48,5 @@ let encode resolved =
       ("image", `String (Build_plan.image_ref resolved.image));
     ]
 
-let version r = Semver.show r.version
-
 let package name requirements resolved =
-  Package.resolve name requirements.declarations (version resolved)
+  Package.resolve name requirements.declarations (Semver.show resolved.version)

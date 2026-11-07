@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type requirement = { version : string; source : string }
 type origin = Default of string | Declared of requirement * requirement list
 type t = { name : string; resolved : string; origin : origin }
@@ -9,13 +11,23 @@ let optional source version =
 
 let versions requirements = List.map (fun r -> r.version) requirements
 
-let no_version ~tool requirements supported =
-  Kiln_core.Error.No_version
-    {
-      tool;
-      requirements = String.concat " && " (versions requirements);
-      supported;
-    }
+let select ~tool ~declarations ~version ~parse ~accept rows =
+  let* candidates =
+    Support.traverse
+      (fun row ->
+        let+ parsed = parse (version row) in
+        (parsed, row))
+      rows
+  in
+  List.find_opt (fun (parsed, row) -> accept parsed row) (List.rev candidates)
+  |> Option.to_result
+       ~none:
+         (Kiln_core.Error.No_version
+            {
+              tool;
+              requirements = String.concat " && " (versions declarations);
+              supported = List.map version rows;
+            })
 
 let resolve ?(default_source = "kiln default") name requirements resolved =
   let origin =

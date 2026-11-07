@@ -23,7 +23,6 @@ type t = private {
           [/opt/venv] from a stage that ends with this block, so changes build
           commands make to the venv are not part of the image; dependencies
           change through these commands. *)
-  platforms : Platforms.t;
   start : startup option;
   error_missing_start : bool;
   provider : string option;

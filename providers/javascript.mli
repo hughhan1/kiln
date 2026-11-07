@@ -19,17 +19,6 @@ type package = {
 val algorithm : algorithm -> string
 (** Lowercase digest name used by packageManager integrity declarations. *)
 
-val integrity_text : integrity -> string
-(** Canonical algorithm.hex encoding of a validated digest. *)
-
-val integrity : string -> (integrity, Kiln_core.Error.t) result
-(** Parse a supported digest algorithm and a correctly sized lowercase hex
-    digest. *)
-
-val package : string -> (package, Kiln_core.Error.t) result
-(** Parse package.json, including engine declarations, scripts, workspaces, and
-    local references. *)
-
 val has_script : package -> string -> bool
 (** Whether a named script exists and is nonempty. *)
 

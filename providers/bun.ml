@@ -84,8 +84,6 @@ let load request source =
     start;
   }
 
-let startup app = app.start
-
 let resolve app =
   Semver_image.resolve ~tool:"Bun" ~pins:Pins.bun app.requirements
 

@@ -117,7 +117,8 @@ let main () =
       $ option
           Arg.(some (list string))
           None "platform"
-          "Comma-separated Linux targets; defaults to the host architecture.")
+          "Comma-separated Linux targets to check; a plan is the same for all \
+           of them.")
   in
   let prepare =
     Cmd.v

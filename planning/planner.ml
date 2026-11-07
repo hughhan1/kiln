@@ -12,11 +12,6 @@ type prepared = {
 let prepare { Provider.provider = (module P); detected } (request : Request.t)
     source =
   let* app = P.load request source in
-  let* () =
-    match (P.startup app, request.Request.error_missing_start) with
-    | None, true -> Error Kiln_core.Error.Missing_start
-    | Some _, _ | None, false -> Ok ()
-  in
   let* resolved = P.resolve app in
   let* plan = P.plan app resolved in
   let runtime =
@@ -29,24 +24,23 @@ let prepare { Provider.provider = (module P); detected } (request : Request.t)
            (Option.fold ~none:[] ~some:Commands.paths)
            [ request.Request.install_steps; request.Request.build ])
   in
-  let+ plan =
+  let* plan =
     Build_plan.stage (Build_plan.base plan)
       (Build_plan.operations plan @ runtime)
   in
-  {
-    plan;
-    secrets = request.Request.secrets;
-    detected;
-    packages = P.packages app resolved;
-    metadata = P.metadata app resolved;
-    resolution =
-      `Assoc
-        [
-          ("format", `Int 1);
-          ("provider", `String P.id);
-          ("data", P.encode resolved);
-        ];
-  }
+  if request.Request.error_missing_start && Build_plan.startup plan = None then
+    Error Kiln_core.Error.Missing_start
+  else
+    Ok
+      {
+        plan;
+        secrets = request.Request.secrets;
+        detected;
+        packages = P.packages app resolved;
+        metadata = P.metadata app resolved;
+        resolution =
+          `Assoc [ ("provider", `String P.id); ("data", P.encode resolved) ];
+      }
 
 let log level message =
   `Assoc
