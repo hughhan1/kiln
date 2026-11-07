@@ -3,7 +3,9 @@
 [![OCaml](https://img.shields.io/badge/OCaml-5.5.1-EC6813?logo=ocaml)](kiln_ocaml.opam)
 [![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Kiln resolves application toolchains and prepares Dockerfiles for BuildKit.
+Kiln selects application toolchains from pins in source and prepares Dockerfiles
+for BuildKit. Planning needs no network; `scripts/bump-pins` refreshes the pins
+for each release.
 
 > ⚠️ **Disclaimer:** This entire repository is vibe-coded.
 
@@ -17,7 +19,7 @@ curl -LsSf https://github.com/hughhan1/kiln/releases/latest/download/install.sh 
 
 ### Prepare a Dockerfile
 
-Inspect an application and resolve its toolchain.
+Inspect an application and select its toolchain.
 
 ```sh
 kiln prepare . --plan-out /tmp/Dockerfile --info-out /tmp/kiln-info.json
@@ -42,7 +44,6 @@ Usage: kiln prepare [OPTIONS] DIRECTORY
 --start-arg ARG         Startup argv element; repeat in order
 --error-missing-start   Require a startup command
 --config-file FILE      Application configuration (default: railpack.json)
---previous PKG@VERSION  Previous package version; repeat per package
 --help[=FMT], -h        Show help (auto, pager, groff, or plain)
 ```
 

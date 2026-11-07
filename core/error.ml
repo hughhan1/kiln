@@ -5,14 +5,12 @@ type t =
   | Workspace_escape of string
   | Containment of string
   | Missing_start
-  | No_version of { tool : string; requirements : string }
-  | Missing_metadata of string
-  | Target_unavailable of string
-  | Integrity_mismatch
-  | Invalid_resolution
+  | No_version of {
+      tool : string;
+      requirements : string;
+      supported : string list;
+    }
   | Filesystem of string
-  | Discovery of string
-  | Transient of string
   | Internal of string
   | Cancelled
 
@@ -24,25 +22,18 @@ let show = function
   | Containment path -> "path escapes or is missing from snapshot: " ^ path
   | Missing_start ->
       "no startup: provide start argv or an application entry point"
-  | No_version { tool; requirements } ->
-      "no compatible " ^ tool ^ " version: " ^ requirements
-  | Missing_metadata message -> "missing metadata: " ^ message
-  | Target_unavailable tag -> "image " ^ tag ^ " lacks a requested target"
-  | Integrity_mismatch -> "integrity does not match the registry tarball"
-  | Invalid_resolution -> "invalid reused resolution"
+  | No_version { tool; requirements; supported } ->
+      "no compatible " ^ tool ^ " version for " ^ requirements ^ "; supported: "
+      ^ String.concat ", " supported
   | Filesystem message -> "filesystem: " ^ message
-  | Discovery message | Transient message ->
-      "toolchain discovery failed: " ^ message
   | Internal message -> "internal error: " ^ message
   | Cancelled -> "operation cancelled"
 
 let statuses = function
   | Cancelled -> (130, 3)
-  | Transient _ -> (75, 75)
   | Internal _ -> (1, 2)
   | Metadata _ | Unsupported _ | Conflict _ | Workspace_escape _ | Containment _
-  | Missing_start | No_version _ | Missing_metadata _ | Target_unavailable _
-  | Integrity_mismatch | Invalid_resolution | Filesystem _ | Discovery _ ->
+  | Missing_start | No_version _ | Filesystem _ ->
       (1, 1)
 
 let exit_status error = fst (statuses error)

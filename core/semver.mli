@@ -14,12 +14,6 @@ val range : string -> (range, string) result
 val show : version -> string
 (** Canonical version text, retaining prerelease and build identifiers. *)
 
-val major : version -> int
-(** The major release component. *)
-
-val stable : version -> bool
-(** Whether the version has no prerelease identifiers. *)
-
 val compare : version -> version -> int
 (** SemVer precedence; build metadata does not affect ordering. *)
 

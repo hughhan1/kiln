@@ -128,10 +128,3 @@ let matches requirements version =
           | Gt -> order > 0
           | Ge -> order >= 0))
     requirements
-
-let exact requirements =
-  List.find_map
-    (function
-      | Compare (Eq, version) -> Some version
-      | Compare ((Ne | Lt | Le | Gt | Ge), _) | Include _ | Exclude _ -> None)
-    requirements

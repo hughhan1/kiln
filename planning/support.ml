@@ -15,13 +15,5 @@ let rec iter f = function
       let* _ = f x in
       iter f xs
 
-let maximum ~compare =
-  List.fold_left
-    (fun best next ->
-      match best with
-      | Some previous when compare previous next >= 0 -> best
-      | None | Some _ -> Some next)
-    None
-
 let inside root path =
   path = root || String.starts_with ~prefix:(Filename.concat root "") path

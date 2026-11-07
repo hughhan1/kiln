@@ -1,9 +1,7 @@
 module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
-module Platforms = Kiln_planning.Platforms
 module Provider = Kiln_planning.Provider
-module Registry = Kiln_planning.Registry
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
 module Support = Kiln_planning.Support
@@ -20,32 +18,6 @@ let parse_range value =
   Result.map_error
     (fun message -> Error.Metadata ("version range " ^ value, message))
     (Semver.range value)
-
-type day = Day of int * int * int
-
-let day field text =
-  let invalid () = Json.metadata field "expected an ISO calendar date" in
-  match String.split_on_char '-' text with
-  | [ year; month; day ]
-    when String.length year = 4
-         && String.length month = 2
-         && String.length day = 2
-         && List.for_all
-              (String.for_all (function '0' .. '9' -> true | _ -> false))
-              [ year; month; day ] ->
-      let y, m, d =
-        (int_of_string year, int_of_string month, int_of_string day)
-      in
-      let leap = y mod 4 = 0 && (y mod 100 <> 0 || y mod 400 = 0) in
-      let days =
-        match m with
-        | 2 -> if leap then 29 else 28
-        | 4 | 6 | 9 | 11 -> 30
-        | 1 | 3 | 5 | 7 | 8 | 10 | 12 -> 31
-        | _ -> 0
-      in
-      if y > 0 && d > 0 && d <= days then Ok (Day (y, m, d)) else invalid ()
-  | [] | _ :: _ -> invalid ()
 
 type manager = Npm | Pnpm
 
@@ -69,7 +41,6 @@ let node_request text =
       Range r
 
 type resolution = {
-  key : string;
   node : Semver.version;
   pm : manager;
   pm_version : Semver.version;
@@ -78,29 +49,9 @@ type resolution = {
   runtime : Build_plan.image;
 }
 
-let decode value =
-  let* o = Json.object_ "resolution" value in
-  let* key = Json.field "key" Json.string o in
-  let* node = Json.field "nodeVersion" (Json.text parse_version) o in
-  let* pm = Json.field "packageManager" (Json.text manager) o in
-  let* pm_version =
-    Json.field "packageManagerVersion" (Json.text parse_version) o
-  in
-  let* manager_install =
-    Json.field "packageManagerInstall"
-      (Json.optional (fun label value ->
-           let* args = Json.list Json.string label value in
-           Build_plan.argv args))
-      o
-  in
-  let* builder = Json.field "builderImage" (Json.text Build_plan.image) o in
-  let+ runtime = Json.field "runtimeImage" (Json.text Build_plan.image) o in
-  { key; node; pm; pm_version; manager_install; builder; runtime }
-
 let encode r =
   `Assoc
     [
-      ("key", `String r.key);
       ("nodeVersion", `String (Semver.show r.node));
       ("packageManager", `String (name r.pm));
       ("packageManagerVersion", `String (Semver.show r.pm_version));
@@ -146,7 +97,6 @@ type snapshot = {
 type inputs = Whole_source | Manifests of string list
 
 type application = {
-  targets : Platforms.t;
   nodes : node_request list;
   node_declarations : Package.requirement list;
   manager_declarations : Package.requirement list;
@@ -158,7 +108,6 @@ type application = {
   inputs : inputs;
   build : Build_plan.operation list;
   command : Build_plan.argv option;
-  fingerprint : string;
 }
 
 let selected_manager pkg (snapshot : snapshot) =
@@ -255,26 +204,6 @@ let interpret (request : Request.t) (snapshot : snapshot) =
     if Request.replaces_install request then Whole_source
     else install_inputs snapshot
   in
-  let fingerprint =
-    Registry.sha256
-      (Json.encode
-         (`Assoc
-            [
-              ( "kiln",
-                `String ("ocaml-0.0.1:" ^ Registry.sha256 Node_toolchains.json)
-              );
-              ( "platforms",
-                Json.string_array
-                  (Platforms.to_strings request.Request.platforms) );
-              ("node", Json.string_array nodes_text);
-              ("manager", `String (name pm));
-              ("managerRanges", Json.string_array manager_text);
-              ( "integrity",
-                match pkg.Javascript.declared_integrity with
-                | None -> `Null
-                | Some h -> `String (Javascript.integrity_text h) );
-            ]))
-  in
   let+ install =
     Request.install_command request
       ([ name pm; "install" ]
@@ -285,7 +214,6 @@ let interpret (request : Request.t) (snapshot : snapshot) =
       | Npm | Pnpm -> [])
   in
   {
-    targets = request.Request.platforms;
     nodes;
     node_declarations;
     manager_declarations;
@@ -299,224 +227,124 @@ let interpret (request : Request.t) (snapshot : snapshot) =
       Request.build_command request
         (if Javascript.has_script pkg "build" then Some build_argv else None);
     command;
-    fingerprint;
   }
 
-type candidate = {
-  candidate_version : Semver.version;
-  candidate_npm : Semver.version option;
-  candidate_lts : string option;
-}
+(* The default is the newest LTS release; EOL lines never enter the pins. *)
+let select_node app =
+  Package.select ~tool:"Node" ~declarations:app.node_declarations
+    ~version:(fun release -> release.Pins.node.Pins.release)
+    ~parse:parse_version
+    ~accept:(fun version release ->
+      let lts = release.Pins.lts in
+      (app.nodes <> [] || Option.is_some lts)
+      && List.for_all
+           (function
+             | Stable -> true
+             | Lts None -> Option.is_some lts
+             | Lts (Some name) -> lts = Some name
+             | Range range -> Semver.matches range version)
+           app.nodes)
+    Pins.node
 
-type node_release = { version : Semver.version; npm : Semver.version }
-
-let select_node app ~today ~releases ~schedule =
-  let* today = day "today" today in
-  let parse label value =
-    let* o = Json.object_ label value in
-    let* version = Json.field "version" (Json.text parse_version) o in
-    let* npm = Json.field "npm" (Json.optional (Json.text parse_version)) o in
-    let+ lts =
-      match Json.member "lts" o with
-      | `String name -> Ok (Some (String.lowercase_ascii name))
-      | `Bool false -> Ok None
-      | `Null | `Bool true | `Int _ | `Float _ | `List _ | `Assoc _ ->
-          Json.metadata "Node LTS" "expected name or false"
-    in
-    { candidate_version = version; candidate_npm = npm; candidate_lts = lts }
+(* npm installs a manager at build time, so an exact declaration needs no pin. *)
+let select_manager app node =
+  let allowed version =
+    List.for_all (fun range -> Semver.matches range version) app.manager_ranges
   in
-  let* values = Json.decode "Node releases" (Json.list parse) releases in
-  let support label value =
-    let* fields = Json.object_ label value in
-    let* start = Json.field "start" (Json.text (day "support start")) fields in
-    let+ finish = Json.field "end" (Json.text (day "support end")) fields in
-    (start, finish)
-  in
-  let* support = Json.decode "Node schedule" (Json.assoc support) schedule in
-  let eligible r =
-    Semver.stable r.candidate_version
-    && (match
-          List.assoc_opt
-            ("v" ^ string_of_int (Semver.major r.candidate_version))
-            support
-        with
-      | None -> false
-      | Some (start, finish) -> start <= today && today < finish)
-    && (app.nodes <> [] || Option.is_some r.candidate_lts)
-    && List.for_all
-         (function
-           | Stable -> true
-           | Lts None -> Option.is_some r.candidate_lts
-           | Lts (Some name) -> r.candidate_lts = Some name
-           | Range range -> Semver.matches range r.candidate_version)
-         app.nodes
-  in
-  let selected =
-    Support.maximum
-      ~compare:(fun a b ->
-        Semver.compare a.candidate_version b.candidate_version)
-      (List.filter eligible values)
-  in
-  match selected with
-  | None ->
-      Error
-        (Error.No_version
-           {
-             tool = "Node";
-             requirements =
-               "no supported stable Node release satisfies the runtime \
-                declarations; EOL lines are excluded";
-           })
-  | Some { candidate_npm = None; _ } ->
-      Error
-        (Error.Missing_metadata
-           "selected Node release is missing its bundled npm version")
-  | Some { candidate_version = version; candidate_npm = Some npm; _ } ->
-      Ok { version; npm }
-
-let select_manager app node bytes =
-  let parse (version_text, value) =
-    match Semver.version version_text with
-    | Error _ -> Ok None
-    | Ok version ->
-        let* o = Json.object_ "package version" value in
-        let* engines = Json.field "engines" (Json.default [] Json.object_) o in
-        let* range = Json.field "node" (Json.default "*" Json.string) engines in
-        let* deprecated =
-          Json.field "deprecated" (Json.default "" Json.string) o
-        in
-        let* range = parse_range range in
-        Ok
-          (if
-             List.for_all
-               (fun range -> Semver.matches range version)
-               app.manager_ranges
-             && Semver.matches range node.version
-             && (app.manager_ranges <> []
-                || (Semver.stable version && deprecated = ""))
-           then Some version
-           else None)
-  in
-  let* fields = Json.decode "npm registry" Json.object_ bytes in
-  let* versions = Json.field "versions" Json.object_ fields in
-  let* versions = Support.traverse parse versions in
-  Option.to_result
-    ~none:
-      (Error.No_version
-         {
-           tool = "package manager";
-           requirements = "no eligible Node-compatible release";
-         })
-    (Support.maximum ~compare:Semver.compare (List.filter_map Fun.id versions))
+  let declared = Package.versions app.manager_declarations in
+  match
+    List.find_map (fun text -> Result.to_option (Semver.version text)) declared
+  with
+  | Some version when allowed version -> Ok version
+  | Some _ | None ->
+      let* tools =
+        Support.traverse
+          (fun tool ->
+            let+ engines = parse_range tool.Pins.engines in
+            (tool.Pins.tool, engines))
+          (match app.manager with Npm -> Pins.npm | Pnpm -> Pins.pnpm)
+      in
+      let+ version, _ =
+        Package.select ~tool:(name app.manager)
+          ~declarations:
+            (app.manager_declarations
+            @ [ Package.require "Node" ("Node " ^ Semver.show node) ])
+          ~version:fst ~parse:parse_version
+          ~accept:(fun version (_, engines) ->
+            allowed version && Semver.matches engines node)
+          tools
+      in
+      version
 
 let manager_tarball manager version =
   let manager = name manager in
   "https://registry.npmjs.org/" ^ manager ^ "/-/" ^ manager ^ "-"
   ^ Semver.show version ^ ".tgz"
 
-let verify_integrity (Javascript.Integrity (kind, expected)) bytes =
-  let module Hash = (val Digestif.module_of_hash' (kind :> Digestif.hash')) in
-  let actual = Hash.(to_hex (digest_string bytes)) in
-  if expected = actual then Ok () else Error Error.Integrity_mismatch
-
-let resolve ~today ~fetch app =
-  let* releases = fetch "https://nodejs.org/dist/index.json" None in
-  let* schedule =
-    fetch "https://raw.githubusercontent.com/nodejs/Release/main/schedule.json"
-      None
-  in
-  let* node = select_node app ~today ~releases ~schedule in
+let resolve app =
+  let* node, release = select_node app in
+  let* npm = parse_version release.Pins.npm in
   let pm = app.manager in
   let* pm_version =
     match (pm, app.manager_ranges, app.integrity) with
-    | Npm, [], None -> Ok node.npm
-    | (Npm | Pnpm), _, _ ->
-        let* metadata = fetch ("https://registry.npmjs.org/" ^ name pm) None in
-        select_manager app node metadata
+    | Npm, [], None -> Ok npm
+    | (Npm | Pnpm), _, _ -> select_manager app node
   in
-  let* () =
-    match app.integrity with
-    | None -> Ok ()
-    | Some integrity ->
-        let* bytes = fetch (manager_tarball pm pm_version) None in
-        verify_integrity integrity bytes
+  let* builder = Build_plan.image release.Pins.node.Pins.builder in
+  let* runtime = Build_plan.image release.Pins.node.Pins.runtime in
+  let+ manager_install =
+    match (pm, app.integrity) with
+    | (Npm | Pnpm), Some (Javascript.Integrity (kind, hex)) ->
+        let+ command =
+          Build_plan.shell
+            (Printf.sprintf
+               "curl -fsSL %s -o /tmp/kiln-manager.tgz && echo '%s  \
+                /tmp/kiln-manager.tgz' | %ssum -c - && npm install --global \
+                /tmp/kiln-manager.tgz && rm /tmp/kiln-manager.tgz"
+               (manager_tarball pm pm_version)
+               hex
+               (Javascript.algorithm kind))
+        in
+        Some command
+    | Npm, None when Semver.compare pm_version npm = 0 -> Ok None
+    | (Npm | Pnpm), None ->
+        let+ command =
+          Build_plan.argv
+            [
+              "npm";
+              "install";
+              "--global";
+              name pm ^ "@" ^ Semver.show pm_version;
+            ]
+        in
+        Some command
   in
-  let* packaged =
-    let* entries =
-      Json.decode "packaged Node toolchains" (Json.list Json.object_)
-        Node_toolchains.json
-    in
-    let matches entry =
-      app.integrity = None
-      && Json.member "node" entry = `String (Semver.show node.version)
-      && Json.member "manager" entry = `String (name pm)
-      && Json.member "version" entry = `String (Semver.show pm_version)
-    in
-    match List.find_opt matches entries with
-    | None -> Ok None
-    | Some entry ->
-        let* builder =
-          Json.field "builder" (Json.text Build_plan.image) entry
-        in
-        let+ runtime =
-          Json.field "runtime" (Json.text Build_plan.image) entry
-        in
-        Some (builder, runtime)
-  in
-  let* builder, runtime, manager_install =
-    match packaged with
-    | Some (builder, runtime) -> Ok (builder, runtime, None)
-    | None ->
-        let image suffix =
-          Registry.image fetch ~platforms:app.targets ~repository:"library/node"
-            (Semver.show node.version ^ suffix)
-        in
-        let* builder = image "-bookworm" in
-        let* runtime = image "-bookworm-slim" in
-        let+ install =
-          match (pm, app.integrity) with
-          | (Npm | Pnpm), Some (Javascript.Integrity (kind, hex)) ->
-              let+ command =
-                Build_plan.shell
-                  (Printf.sprintf
-                     "curl -fsSL %s -o /tmp/kiln-manager.tgz && echo '%s  \
-                      /tmp/kiln-manager.tgz' | %ssum -c - && npm install \
-                      --global /tmp/kiln-manager.tgz && rm \
-                      /tmp/kiln-manager.tgz"
-                     (manager_tarball pm pm_version)
-                     hex
-                     (Javascript.algorithm kind))
-              in
-              Some command
-          | Npm, None when Semver.compare pm_version node.npm = 0 -> Ok None
-          | (Npm | Pnpm), None ->
-              let+ command =
-                Build_plan.argv
-                  [
-                    "npm";
-                    "install";
-                    "--global";
-                    name pm ^ "@" ^ Semver.show pm_version;
-                  ]
-              in
-              Some command
-        in
-        (builder, runtime, install)
-  in
-  Ok
-    {
-      key = app.fingerprint;
-      node = node.version;
-      pm;
-      pm_version;
-      manager_install;
-      builder;
-      runtime;
-    }
+  { node; pm; pm_version; manager_install; builder; runtime }
 
 let id = "node"
 let public_name = id
 let exclude = [ "node_modules" ]
+
+(* npm honours --libc from 10.4. A replaced install command always copies the
+   whole source, and pnpm has no equivalent flags. *)
+let native app r =
+  match (app.inputs, r.pm) with
+  | Manifests _, Npm ->
+      Semver.compare r.pm_version (Result.get_ok (parse_version "10.4.0")) >= 0
+  | Manifests _, Pnpm | Whole_source, _ -> false
+
+(* An install script may compile for the platform it runs on, so a package set
+   with one installs under emulation. *)
+let native_npm =
+  {|case "$TARGETARCH" in amd64) cpu=x64 ;; arm64) cpu=arm64 ;; esac
+if npm install --os=linux --cpu="$cpu" --libc=glibc --ignore-scripts \
+  && ! grep -qs '"hasInstallScript": true' node_modules/.package-lock.json; then
+  echo "kiln: installed Node dependencies natively for $TARGETARCH"
+else
+  echo "kiln: no native Node install for $TARGETARCH; installing under emulation"
+  rm -rf node_modules
+  touch .kiln-emulate
+fi|}
 
 let plan app r =
   let open Build_plan in
@@ -540,34 +368,54 @@ let plan app r =
     environment
       [ ("NODE_ENV", "production"); ("HOME", "/tmp"); ("PORT", "8080") ]
   in
-  let* toolchain =
-    stage (Image r.builder)
+  let toolchain base =
+    stage base
       ([ Workdir "/app"; Env ci_env ]
       @ manager_env
       @ List.map (fun command -> Run command) (Option.to_list r.manager_install)
       )
   in
+  let* builder = toolchain (Image r.builder) in
   let copy_source = Source.copy ~exclude [ "." ] "." in
   let install = Run app.install in
-  let* build =
-    stage (Stage toolchain)
-      ((match app.inputs with
-         | Whole_source -> copy_source :: app.install_commands [ install ]
-         | Manifests paths ->
-             app.install_commands (Source.manifests paths @ [ install ])
-             @ [ copy_source ])
-      @ app.build)
+  let* steps =
+    match app.inputs with
+    | Whole_source -> Ok (copy_source :: app.install_commands [ install ])
+    | Manifests paths when native app r ->
+        let* base = toolchain (Native r.builder) in
+        let* native_install = argv [ "/bin/sh"; "-c"; native_npm ] in
+        let* installed =
+          stage (Stage base) (Source.manifests paths @ [ Run native_install ])
+        in
+        let+ emulated =
+          argv
+            ([
+               "/bin/sh";
+               "-c";
+               {|[ ! -e .kiln-emulate ] || { rm .kiln-emulate && "$@"; }|};
+               "kiln";
+             ]
+            @ arguments app.install)
+        in
+        app.install_commands
+          [ copy installed [ "/app/" ] "/app/"; Run emulated ]
+        @ [ copy_source ]
+    | Manifests paths ->
+        Ok
+          (app.install_commands (Source.manifests paths @ [ install ])
+          @ [ copy_source ])
   in
+  let* build = stage (Stage builder) (steps @ app.build) in
   stage (Image r.runtime)
     ([ Workdir "/app"; Env runtime_env ]
     @ manager_env
     @ Option.fold ~none:[]
         ~some:(fun _ ->
           [
-            copy toolchain
+            copy builder
               [ "/usr/local/lib/node_modules/" ^ pm ^ "/" ]
               ("/usr/local/lib/node_modules/" ^ pm ^ "/");
-            copy toolchain [ "/usr/local/bin/" ] "/usr/local/bin/";
+            copy builder [ "/usr/local/bin/" ] "/usr/local/bin/";
           ])
         r.manager_install
     @ [
@@ -619,13 +467,6 @@ let load request source =
       source_links = source.Source.links;
     }
 
-let startup app = app.command
-let fingerprint app = app.fingerprint
-
-let legacy app value =
-  let+ r = decode value in
-  if r.key = app.fingerprint then Some r else None
-
 let packages app r =
   [
     Package.resolve "node" app.node_declarations (Semver.show r.node);
@@ -635,5 +476,11 @@ let packages app r =
       (name r.pm) app.manager_declarations (Semver.show r.pm_version);
   ]
 
-let metadata app =
-  [ ("nodeRuntime", "node"); ("nodePackageManager", name app.manager) ]
+let metadata app r =
+  [
+    ( "dependencyInstall",
+      if native app r then "native, emulated if a package has an install script"
+      else "emulated" );
+    ("nodeRuntime", "node");
+    ("nodePackageManager", name app.manager);
+  ]

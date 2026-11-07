@@ -56,7 +56,6 @@ let exact =
   qualifiers >>| fun (pre, build) -> core a b c pre build
 
 let version text = parse_string ~consume:Consume.All exact text
-let major v = v.major
 let stable v = v.pre = []
 let show_id = function Numeric n -> string_of_int n | Textual s -> s
 

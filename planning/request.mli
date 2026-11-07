@@ -23,15 +23,12 @@ type t = private {
           [/opt/venv] from a stage that ends with this block, so changes build
           commands make to the venv are not part of the image; dependencies
           change through these commands. *)
-  platforms : Platforms.t;
   start : startup option;
   error_missing_start : bool;
   provider : string option;
   build : Commands.t option;
   config_file : string;
   variables : Build_plan.environment option;
-  previous : Yojson.Basic.t option;
-  previous_versions : (string * string) list;
 }
 
 val decode : (string * Yojson.Basic.t) list -> (t, Kiln_core.Error.t) result
@@ -50,8 +47,7 @@ val configure : t -> Source.t -> (t, Kiln_core.Error.t) result
 
 val defaults :
   t -> string -> Package.requirement list -> Package.requirement list
-(** Environment version overrides replace declarations; previous versions are
-    used only when neither was supplied. *)
+(** Environment version overrides replace declarations. *)
 
 val install_commands :
   t -> Build_plan.operation list -> Build_plan.operation list

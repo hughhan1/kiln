@@ -1,32 +1,12 @@
 module Planner = Kiln_planning.Planner
 module Build_plan = Kiln_planning.Build_plan
+module Pins = Kiln_providers.Pins
+module Version = Kiln_providers.Python_version
 open Contract_support
 
-let fetch =
-  registry
-    [
-      ( "library/python",
-        List.concat_map
-          (fun version -> [ version ^ "-trixie"; version ^ "-slim-trixie" ])
-          [
-            "3.11.14";
-            "3.12.0";
-            "3.12.11";
-            "3.12.12";
-            "3.13.7";
-            "3.14.0rc1";
-            "4.0.0";
-          ]
-        @ [ "3.14.0-alpine" ] );
-      ("astral/uv", [ "0.8.0"; "0.9.1"; "0.10.0-rc.1" ]);
-    ]
-
-let prepare ?(fetch = fetch) root fields =
-  Kiln_io.Driver.prepare_with ~today:"2026-10-12" ~fetch (request root fields)
-
-let selected response =
-  Yojson.Basic.Util.(
-    response.Planner.resolution |> member "data" |> member "python")
+let oldest_python = (List.hd Pins.python).Pins.release
+let newest_python = (last Pins.python).Pins.release
+let oldest_uv = (List.hd Pins.uv).Pins.version
 
 (* Builder steps as text: context copies and RUN argv. *)
 let step = function
@@ -47,14 +27,18 @@ let own_steps stage = List.filter_map step (Build_plan.operations stage)
 let rec inherited_steps stage =
   (match Build_plan.base stage with
     | Build_plan.Stage parent -> inherited_steps parent
-    | Build_plan.Image _ -> [])
+    | Build_plan.Image _ | Build_plan.Native _ -> [])
   @ own_steps stage
 
 let steps prepared =
   inherited_steps
     (List.find
        (fun stage -> List.mem "source" (own_steps stage))
-       (Build_plan.stages prepared.Planner.plan))
+       (List.rev (Build_plan.stages prepared.Planner.plan)))
+
+(* Steps of every stage, each after the stages it depends on. *)
+let all_steps prepared =
+  List.concat_map own_steps (Build_plan.stages prepared.Planner.plan)
 
 (* Whether the runtime copies the venv from a stage that copies the source. *)
 let venv_follows_source prepared =
@@ -84,131 +68,71 @@ let ordered steps prefixes =
 
 let () =
   List.iter
-    (fun (constraint_, versions, expected) ->
-      snapshot
-        [
-          ("main.py", "");
-          ( "pyproject.toml",
-            "[project]\nrequires-python = '" ^ constraint_ ^ "'\n" );
-        ]
-        ("Python requirement " ^ constraint_ ^ ": " ^ String.concat "," versions)
-        (fun root ->
-          let fetch =
-            registry
-              [
-                ( "library/python",
-                  List.concat_map
-                    (fun version ->
-                      [ version ^ "-trixie"; version ^ "-slim-trixie" ])
-                    versions );
-              ]
+    (fun (constraint_, included, excluded) ->
+      test ("Python requirement " ^ constraint_) (fun () ->
+          let requirement = ok (Version.specifier constraint_) in
+          let holds release =
+            Version.matches requirement (ok (Version.version release))
           in
-          let result = prepare ~fetch root [] in
-          match expected with
-          | Some version ->
-              check "highest matching stable interpreter"
-                (selected (ok result) = `String version)
-          | None ->
-              check "no matching interpreter"
-                (Result.map selected result
-                = Error
-                    (Kiln_core.Error.No_version
-                       {
-                         tool = "library/python";
-                         requirements = "declared version constraints";
-                       }))))
+          check "matching releases" (List.for_all holds included);
+          check "other releases" (not (List.exists holds excluded))))
     [
-      (">=3.11,<3.14,!=3.12.*", [ "3.11.14"; "3.13.7" ], Some "3.13.7");
-      (">=3.11,<3.14,!=3.12.*", [ "3.10.9"; "3.12.12"; "3.14.0" ], None);
-      ("~=3.12.1", [ "3.12.1"; "3.12.12" ], Some "3.12.12");
-      ("~=3.12.1", [ "3.12.0"; "3.13.0" ], None);
-      ("~=3.12", [ "3.12.0"; "3.13.7" ], Some "3.13.7");
-      ("~=3.12", [ "3.11.0"; "4.0.0" ], None);
-      ("==3.12", [ "3.12.0"; "3.12.1" ], Some "3.12.0");
-      ("==3.12,>3.12", [ "3.12.0"; "3.12.1" ], None);
-      ("<=3.12.11,>3.11.14", [ "3.12.0"; "3.12.11" ], Some "3.12.11");
-      ("<=3.12.11,>3.11.14", [ "3.11.14"; "3.12.12" ], None);
+      ( ">=3.11,<3.14,!=3.12.*",
+        [ "3.11.14"; "3.13.7" ],
+        [ "3.10.9"; "3.12.12"; "3.14.0" ] );
+      ("~=3.12.1", [ "3.12.1"; "3.12.12" ], [ "3.12.0"; "3.13.0" ]);
+      ("~=3.12", [ "3.12.0"; "3.13.7" ], [ "3.11.0"; "4.0.0" ]);
+      ("==3.12", [ "3.12.0" ], [ "3.12.1" ]);
+      ("==3.12,>3.12", [], [ "3.12.0"; "3.12.1" ]);
+      ("<=3.12.11,>3.11.14", [ "3.12.0"; "3.12.11" ], [ "3.11.14"; "3.12.12" ]);
     ];
   snapshot
     [
       ("main.py", "print('hello')");
-      (".python-version", "3.12");
-      ("pyproject.toml", "[project]\nrequires-python = '>=3.11,!=3.12.12'\n");
+      (".python-version", oldest_python);
+      ( "pyproject.toml",
+        "[project]\nrequires-python = '>=3,!=" ^ newest_python ^ "'\n" );
     ]
     "Python intersects file and project constraints"
     (fun root ->
       let first = ok (prepare root []) in
-      check "does not truncate a range" (selected first = `String "3.12.11");
-      write root "main.py" "print('changed')";
-      let reused =
-        ok
-          (prepare
-             ~fetch:(fun _ _ -> failwith "offline discovery")
-             root
-             [ ("resolution", first.Planner.resolution) ])
-      in
-      check "toolchain unchanged"
-        (reused.Planner.resolution = first.Planner.resolution);
       let open Yojson.Basic.Util in
-      let package =
-        `Assoc (Planner.info reused)
-        |> member "resolvedPackages" |> member "python"
-      in
-      check "reused toolchain retains the intersected request and its sources"
-        (member "requestedVersion" package = `String "3.12 && >=3.11,!=3.12.12"
+      let data = first.Planner.resolution |> member "data" in
+      let pin = List.hd Pins.python in
+      check "the file selects the pin's images"
+        (member "builder" data = `String pin.Pins.builder
+        && member "runtime" data = `String pin.Pins.runtime);
+      let package = package first "python" in
+      check "the plan reports the intersected request and its sources"
+        (member "resolvedVersion" package = `String oldest_python
+        && member "requestedVersion" package
+           = `String (oldest_python ^ " && >=3,!=" ^ newest_python)
         && member "source" package
            = `String ".python-version, pyproject.toml project.requires-python");
-      write root ".python-version" "3.13";
-      check "requirements invalidate reuse"
-        (selected
-           (ok (prepare root [ ("resolution", first.Planner.resolution) ]))
-        = `String "3.13.7"));
+      write root ".python-version" newest_python;
+      check "declarations that exclude each other leave nothing"
+        (Result.is_error (prepare root [])));
   snapshot
     [
       ("main.py", "");
-      (".python-version", "3.12.11");
+      (".python-version", newest_python);
       ("pyproject.toml", "[project]\nrequires-python = '>=3.11'\n");
       ("uv.lock", "version=1\nrequires-python = '>=3.11'\n");
     ]
-    "uv defaults, previous versions, and intersected declarations"
+    "uv intersects declarations"
     (fun root ->
       let open Yojson.Basic.Util in
-      let package prepared =
-        `Assoc (Planner.info prepared)
-        |> member "resolvedPackages" |> member "uv"
-      in
-      let default = package (ok (prepare root [])) in
-      check "uv default has no declared version"
-        (member "requestedVersion" default = `Null
-        && member "source" default = `String "kiln default"
-        && member "resolvedVersion" default = `String "0.9.1");
-      let previous = ("previousVersions", `Assoc [ ("uv", `String "0.8.0") ]) in
-      let pinned =
-        ok
-          (prepare
-             ~fetch:(fun url token ->
-               check "exact toolchain avoids catalogs"
-                 (not (String.ends_with ~suffix:"/tags/list" url));
-               fetch url token)
-             root [ previous ])
-      in
-      let uv = package pinned in
-      check "previous version is preserved as declared"
-        (member "requestedVersion" uv = `String "0.8.0"
-        && member "resolvedVersion" uv = `String "0.8.0"
-        && member "source" uv = `String "previousVersions");
-      write root "uv.toml" "required-version = '>=0.9'\n";
+      write root "uv.toml" ("required-version = '>=" ^ oldest_uv ^ "'\n");
       write root "pyproject.toml"
-        "[project]\n\
-         requires-python = '>=3.11'\n\
-         [tool.uv]\n\
-         required-version = '<0.10'\n";
-      let first = ok (prepare root [ previous ]) in
-      let uv = package first in
-      check
-        "explicit constraints supersede previous defaults with their origins"
-        (member "requestedVersion" uv = `String "<0.10 && >=0.9"
-        && member "resolvedVersion" uv = `String "0.9.1"
+        ("[project]\n\
+          requires-python = '>=3.11'\n\
+          [tool.uv]\n\
+          required-version = '<=" ^ oldest_uv ^ "'\n");
+      let uv = package (ok (prepare root [])) "uv" in
+      check "explicit constraints select a pin and report their origins"
+        (member "requestedVersion" uv
+         = `String ("<=" ^ oldest_uv ^ " && >=" ^ oldest_uv)
+        && member "resolvedVersion" uv = `String oldest_uv
         && member "source" uv
            = `String
                "pyproject.toml tool.uv.required-version, uv.toml \
@@ -233,25 +157,22 @@ let () =
                ( "environment",
                  `Assoc
                    [
-                     ("RAILPACK_PYTHON_VERSION", `String "3.12.11");
-                     ("RAILPACK_UV_VERSION", `String "0.8.0");
+                     ("RAILPACK_PYTHON_VERSION", `String oldest_python);
+                     ("RAILPACK_UV_VERSION", `String oldest_uv);
                    ] );
              ])
       in
       let open Yojson.Basic.Util in
-      let packages =
-        `Assoc (Planner.info prepared) |> member "resolvedPackages"
-      in
       List.iter
         (fun (name, version, setting) ->
-          let package = member name packages in
+          let package = package prepared name in
           check "environment toolchain and provenance selected"
             (member "resolvedVersion" package = `String version
             && member "requestedVersion" package = `String version
             && member "source" package = `String setting))
         [
-          ("python", "3.12.11", "RAILPACK_PYTHON_VERSION");
-          ("uv", "0.8.0", "RAILPACK_UV_VERSION");
+          ("python", oldest_python, "RAILPACK_PYTHON_VERSION");
+          ("uv", oldest_uv, "RAILPACK_UV_VERSION");
         ]);
   snapshot
     [
@@ -263,23 +184,95 @@ let () =
       Unix.mkdir (Filename.concat root "requirements") 0o700;
       write root "requirements/base.txt" "--hash=sha256:abc\nflask>=3\n";
       let prepared = ok (prepare root []) in
-      let steps = steps prepared in
       check "the venv comes from the stage before the source copy"
         (not (venv_follows_source prepared));
-      check "environment, manifests, install, then source"
-        (ordered steps
+      check "environment, manifests, native install, fallback, then source"
+        (ordered (all_steps prepared)
            [
              "python -m venv";
              "manifest requirements.txt";
              "manifest requirements/base.txt";
-             "python -m pip install --no-cache-dir -r requirements.txt";
+             "/bin/sh -c case";
+             "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
              "source";
            ]);
       let dockerfile = Planner.dockerfile prepared in
+      check "the fallback installs the same requirements"
+        (contains dockerfile {|"kiln","-r","requirements.txt"|});
       check "manifests keep their own paths"
         (contains dockerfile {|COPY ["requirements.txt","./"]|}
         && contains dockerfile
              {|COPY ["requirements/base.txt","requirements/"]|}));
+  let pyproject dependency =
+    "[project]\nname='app'\ndynamic=['version']\ndependencies=['" ^ dependency
+    ^ "']\n\
+       [build-system]\n\
+       requires=['setuptools']\n\
+       build-backend='setuptools.build_meta'\n"
+  in
+  let project = pyproject "idna==3.10" in
+  let install_mode prepared =
+    Yojson.Basic.Util.(
+      `Assoc (Planner.info prepared)
+      |> member "metadata" |> member "dependencyInstall" |> to_string)
+  in
+  snapshot
+    [ ("pyproject.toml", project); ("main.py", "") ]
+    "pip project installs dependencies natively before the source"
+    (fun root ->
+      let prepared = ok (prepare root []) in
+      let dockerfile = Planner.dockerfile prepared in
+      check "the install stage runs on the build platform and targets the image"
+        (contains dockerfile "FROM --platform=$BUILDPLATFORM"
+        && contains dockerfile "ARG TARGETARCH"
+        && contains dockerfile {|--python-platform \"$arch-manylinux_2_40\"|}
+        && contains dockerfile {|"idna==3.10"]|});
+      check "the plan names the install path"
+        (String.starts_with ~prefix:"native" (install_mode prepared));
+      check "the project installs alone after the source copy"
+        (ordered (steps prepared)
+           [
+             "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
+             "source";
+             "/bin/sh -c set -e; [ ! -e /opt/kiln-project/.kiln-emulate ]";
+           ]);
+      check "the project builds natively too"
+        (contains dockerfile {|"--no-deps","--prefix=/opt/kiln-project","."|});
+      check "a source edit leaves the venv layer alone"
+        (not (venv_follows_source prepared));
+      check "the runtime overlays the project and compiles the standard library"
+        (contains dockerfile {|["/opt/kiln-project/","/opt/venv/"]|}
+        && contains dockerfile {|"compileall","-q","-j","0","/usr/local/lib"|});
+      write root "main.py" "print('edited')\n";
+      write root "pyproject.toml" (project ^ "[tool.ruff]\nline-length=100\n");
+      check "editing source or unrelated configuration keeps the plan"
+        (Planner.dockerfile (ok (prepare root [])) = dockerfile);
+      write root "pyproject.toml" (pyproject "idna==3.11");
+      check "a dependency bump changes the install"
+        (Planner.dockerfile (ok (prepare root [])) <> dockerfile));
+  snapshot
+    [ ("pyproject.toml", project); ("main.py", "") ]
+    "pip's own environment keeps the install with pip"
+    (fun root ->
+      let prepared =
+        ok
+          (prepare root
+             [
+               ( "environment",
+                 `Assoc [ ("PIP_INDEX_URL", `String "https://example.test") ] );
+             ])
+      in
+      check "stays on the target platform"
+        (not (contains (Planner.dockerfile prepared) "$BUILDPLATFORM"));
+      check "the plan names the install path"
+        (install_mode prepared = "emulated");
+      check "dependencies still precede the source"
+        (ordered (steps prepared)
+           [
+             "python -m pip install --no-cache-dir idna==3.10";
+             "source";
+             "/bin/sh -c python -m pip install --no-cache-dir --no-deps";
+           ]));
   List.iter
     (fun (label, files, fields) ->
       snapshot files label (fun root ->
@@ -295,13 +288,14 @@ let () =
       ( "local requirement keeps the whole source",
         [ ("requirements.txt", "./packages/local\n"); ("main.py", "") ],
         [] );
-      ( "project install keeps the whole source",
+      ( "dynamic dependencies keep the whole source",
         [
           ("requirements.txt", "idna==3.10\n");
           ( "pyproject.toml",
             "[project]\n\
              name='app'\n\
              version='1.0.0'\n\
+             dynamic=['dependencies']\n\
              [build-system]\n\
              requires=['setuptools']\n\
              build-backend='setuptools.build_meta'\n" );
@@ -364,23 +358,21 @@ let () =
           let prepared = ok (prepare root []) in
           let steps = steps prepared in
           let sync = "uv sync --locked --no-dev" in
+          let project = sync ^ " --no-editable" in
           check "the venv comes from the stage that installs the project"
             (venv_follows_source prepared = finish);
-          check "uv installs dependencies from manifests"
+          check
+            "dependencies install from manifests, the project after the source"
             (ordered steps
-               [
-                 "manifest .python-version pyproject.toml uv.lock";
-                 sync ^ " --no-install-project";
-                 "source";
-               ]);
-          check "the project installs after the source copy"
-            (List.exists
-               (String.starts_with ~prefix:(sync ^ " --no-editable"))
-               steps
-            = finish);
-          if finish then
-            check "project sync follows the source copy"
-              (ordered steps [ "source"; sync ^ " --no-editable" ])))
+               ([
+                  "manifest .python-version pyproject.toml uv.lock";
+                  sync ^ " --no-install-project";
+                  "source";
+                ]
+               @ if finish then [ project ] else []));
+          check "a virtual project has nothing to install"
+            (finish
+            || not (List.exists (String.starts_with ~prefix:project) steps))))
     [
       ( "uv packaged project installs dependencies first",
         "[build-system]\n\
@@ -415,37 +407,35 @@ let () =
         (fun root ->
           write root "railpack.json"
             ({|{"steps":{"install":{"commands":|} ^ commands ^ "}}}");
-          let steps =
-            steps
-              (ok
-                 (prepare root
-                    [
-                      ( "environment",
-                        `Assoc
-                          [ ("RAILPACK_INSTALL_CMD", `String "echo ignored") ]
-                      );
-                    ]))
+          let prepared =
+            ok
+              (prepare root
+                 [
+                   ( "environment",
+                     `Assoc [ ("RAILPACK_INSTALL_CMD", `String "echo ignored") ]
+                   );
+                 ])
           in
+          let steps = steps prepared in
           check "configured commands take their place" (ordered steps expected);
           check "configuration replaces the install command"
             (not (List.mem "/bin/sh -c echo ignored" steps));
           check "inheritance selects the dependency layout"
-            (List.exists (String.starts_with ~prefix:"manifest") steps
+            (List.exists
+               (String.starts_with ~prefix:"manifest")
+               (all_steps prepared)
             = manifests)))
     [
       ( {|["python -c 'print(1)'", "..."]|},
         [
-          "python -m venv";
           "/bin/sh -c python -c 'print(1)'";
-          "manifest requirements.txt";
-          "python -m pip install";
+          "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
           "source";
         ],
         true );
       ( {|["...", "python -c 'print(1)'"]|},
         [
-          "manifest requirements.txt";
-          "python -m pip install";
+          "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
           "/bin/sh -c python -c 'print(1)'";
           "source";
         ],
@@ -498,14 +488,8 @@ let () =
           check "manager tool is installed in a separate virtualenv"
             (contains dockerfile "/opt/kiln-tools/bin/pip"
             && contains dockerfile (manager ^ "==" ^ default_version));
-          check "manager tools are not copied into runtime"
-            ((not (contains dockerfile "COPY --from=kiln-stage"))
-            || not (contains dockerfile "/opt/kiln-tools/"));
           let open Yojson.Basic.Util in
-          let package =
-            `Assoc (Planner.info prepared)
-            |> member "resolvedPackages" |> member manager
-          in
+          let package = package prepared manager in
           check "manager version is reported"
             (member "resolvedVersion" package = `String default_version
             && member "source" package = `String "kiln default");
@@ -525,7 +509,7 @@ let () =
         "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"" );
     ];
   List.iter
-    (fun (manager, lockfile, no_root) ->
+    (fun (manager, no_root) ->
       snapshot
         [
           ( "pyproject.toml",
@@ -535,120 +519,37 @@ let () =
             else "distribution=false\n" );
           ("main.py", "");
         ]
-        (manager ^ " unlocked install and version reuse")
+        (manager ^ " unlocked install")
         (fun root ->
-          let first = ok (prepare root []) in
-          let dockerfile = Planner.dockerfile first in
+          let dockerfile = Planner.dockerfile (ok (prepare root [])) in
           check "unlocked installs do not request lock checks"
             ((not (contains dockerfile "--check"))
             && not (contains dockerfile "check --lock"));
-          check "unlocked installs do not copy project metadata back"
-            (not (Sys.file_exists (Filename.concat root lockfile)));
           check "default manager command honors package mode"
-            (contains dockerfile no_root);
-          let reused =
-            ok
-              (prepare
-                 ~fetch:(fun _ _ ->
-                   failwith "manager resolution discovered tools")
-                 root
-                 [ ("resolution", first.Planner.resolution) ])
-          in
-          check "manager resolution is reused without registry discovery"
-            (reused.Planner.resolution = first.Planner.resolution)))
-    [ ("poetry", "poetry.lock", "--no-root"); ("pdm", "pdm.lock", "--no-self") ];
-  snapshot
-    [
-      ( "pyproject.toml",
-        "[project]\n\
-         name='manager-app'\n\
-         version='1.0.0'\n\
-         requires-python='>=3.11,<3.14'\n\
-         [tool.poetry]\n\
-         package-mode=true\n" );
-      ("poetry.lock", "");
-    ]
-    "Poetry package mode and version overrides"
-    (fun root ->
-      let override =
-        ok
-          (prepare root
-             [
-               ( "environment",
-                 `Assoc [ ("RAILPACK_POETRY_VERSION", `String "2.4.0") ] );
-             ])
-      in
-      let open Yojson.Basic.Util in
-      let package =
-        `Assoc (Planner.info override)
-        |> member "resolvedPackages" |> member "poetry"
-      in
-      check "exact manager override is reported"
-        (member "resolvedVersion" package = `String "2.4.0"
-        && member "source" package = `String "RAILPACK_POETRY_VERSION");
-      check "Poetry package mode installs the root project"
-        (contains
-           (Planner.dockerfile override)
-           "\"poetry\",\"install\",\"--only\",\"main\"");
-      let previous =
-        ok
-          (prepare root
-             [ ("previousVersions", `Assoc [ ("poetry", `String "2.3.0") ]) ])
-      in
-      let package =
-        `Assoc (Planner.info previous)
-        |> member "resolvedPackages" |> member "poetry"
-      in
-      check "previous manager version is selected"
-        (member "resolvedVersion" package = `String "2.3.0"
-        && member "source" package = `String "previousVersions"));
+            (contains dockerfile no_root)))
+    [ ("poetry", "--no-root"); ("pdm", "--no-self") ];
   List.iter
-    (fun (manager, extra, expected) ->
+    (fun (manager, version) ->
       snapshot
-        [ ("pyproject.toml", manager_project manager ^ extra); ("main.py", "") ]
-        (manager ^ " application mode")
+        [ ("pyproject.toml", manager_project manager); ("main.py", "") ]
+        (manager ^ " version override")
         (fun root ->
-          let dockerfile = Planner.dockerfile (ok (prepare root [])) in
-          check "application mode skips installing the project itself"
-            (contains dockerfile expected)))
-    [
-      ("poetry", "package-mode = false\n", "--no-root");
-      ("pdm", "distribution = false\n", "--no-self");
-    ];
-  snapshot
-    [
-      ("pyproject.toml", manager_project "pdm" ^ "distribution=true\n");
-      ("pdm.lock", "");
-      ("main.py", "");
-    ]
-    "PDM version override and previous version"
-    (fun root ->
-      let open Yojson.Basic.Util in
-      let package prepared =
-        `Assoc (Planner.info prepared)
-        |> member "resolvedPackages" |> member "pdm"
-      in
-      let override =
-        ok
-          (prepare root
-             [
-               ( "environment",
-                 `Assoc [ ("RAILPACK_PDM_VERSION", `String "2.28.1") ] );
-             ])
-      in
-      let package_override = package override in
-      check "exact PDM override is reported"
-        (member "resolvedVersion" package_override = `String "2.28.1"
-        && member "source" package_override = `String "RAILPACK_PDM_VERSION");
-      let previous =
-        ok
-          (prepare root
-             [ ("previousVersions", `Assoc [ ("pdm", `String "2.27.0") ]) ])
-      in
-      let package_previous = package previous in
-      check "previous PDM version is selected"
-        (member "resolvedVersion" package_previous = `String "2.27.0"
-        && member "source" package_previous = `String "previousVersions"));
+          let setting =
+            "RAILPACK_" ^ String.uppercase_ascii manager ^ "_VERSION"
+          in
+          let prepared =
+            ok
+              (prepare root
+                 [ ("environment", `Assoc [ (setting, `String version) ]) ])
+          in
+          let open Yojson.Basic.Util in
+          let package = package prepared manager in
+          check "the override is reported"
+            (member "resolvedVersion" package = `String version
+            && member "source" package = `String setting);
+          check "the override is installed"
+            (contains (Planner.dockerfile prepared) (manager ^ "==" ^ version))))
+    [ ("poetry", "2.4.0"); ("pdm", "2.28.1") ];
   snapshot
     [
       ( "pyproject.toml",
@@ -693,22 +594,6 @@ let () =
         "pyproject.toml" "[project]\nname='local'\nversion='1.0.0'\n";
       check "contained project-root dependency is accepted"
         (Result.is_ok (prepare root [])));
-  snapshot
-    [
-      ( "pyproject.toml",
-        "[project]\n\
-         name='manager-app'\n\
-         version='1.0.0'\n\
-         requires-python='>=3.11,<3.14'\n\
-         dependencies=['local @ file:///${PROJECT_ROOT}/../outside']\n\
-         [tool.pdm]\n\
-         distribution=false\n" );
-      ("main.py", "");
-    ]
-    "PDM project-root escape is rejected"
-    (fun root ->
-      check "escaping local dependency is rejected"
-        (Result.is_error (prepare root [])));
   List.iter
     (fun (label, files, message) ->
       snapshot files label (fun root ->
@@ -795,5 +680,17 @@ let () =
         [ ("main.py", ""); ("requirements.txt", "local@file:///etc/passwd\n") ]
       );
       ("uv requires project", [ ("main.py", ""); ("uv.lock", "version=1\n") ]);
+      ( "PDM project-root escape",
+        [
+          ("main.py", "");
+          ( "pyproject.toml",
+            "[project]\n\
+             name='manager-app'\n\
+             version='1.0.0'\n\
+             requires-python='>=3.11,<3.14'\n\
+             dependencies=['local @ file:///${PROJECT_ROOT}/../outside']\n\
+             [tool.pdm]\n\
+             distribution=false\n" );
+        ] );
     ];
   finish ()

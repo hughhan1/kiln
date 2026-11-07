@@ -1,15 +1,7 @@
 module Planner = Kiln_planning.Planner
 module Build_plan = Kiln_planning.Build_plan
+module Pins = Kiln_providers.Pins
 open Contract_support
-
-let fetch =
-  registry
-    [
-      ("denoland/deno", [ "1.46.3"; "2.4.3"; "2.5.1"; "2.6.0-rc.1"; "alpine" ]);
-    ]
-
-let prepare ?(fetch = fetch) root fields =
-  Kiln_io.Driver.prepare_with ~today:"2026-10-12" ~fetch (request root fields)
 
 let () =
   snapshot
@@ -25,42 +17,25 @@ let () =
     ]
     "Deno configuration wins over package fallback"
     (fun root ->
-      let first = ok (prepare root []) in
+      let plan = ok (prepare root []) in
       check "Deno selected"
-        (Yojson.Basic.Util.member "provider" first.Planner.resolution
+        (Yojson.Basic.Util.member "provider" plan.Planner.resolution
         = `String "deno");
       check "Deno task startup"
-        (Option.map Build_plan.arguments (Build_plan.startup first.Planner.plan)
-        = Some [ "deno"; "task"; "start" ]);
-      check "stable Deno"
-        (Yojson.Basic.Util.(
-           first.Planner.resolution |> member "data" |> member "version")
-        = `String "2.5.1");
-      write root "deno.jsonc" {|{"tasks":{"start":"deno run other.ts"}}|};
-      let reused =
-        ok
-          (prepare
-             ~fetch:(fun _ _ -> failwith "offline discovery")
-             root
-             [ ("resolution", first.Planner.resolution) ])
-      in
-      check "startup preserves resolution"
-        (reused.Planner.resolution = first.Planner.resolution));
+        (Option.map Build_plan.arguments (Build_plan.startup plan.Planner.plan)
+        = Some [ "deno"; "task"; "start" ]));
+  let oldest = (List.hd Pins.deno).Pins.version in
   snapshot
     [
       ("deno.json", {|{"tasks":{"start":"deno run main.ts"}}|});
-      (".deno-version", "2.4.3");
+      (".deno-version", oldest);
     ]
-    "Deno exact version avoids tag discovery"
+    "Deno version file selects its pin"
     (fun root ->
-      ignore
-        (ok
-           (prepare
-              ~fetch:(fun url token ->
-                check "no catalog"
-                  (not (String.ends_with ~suffix:"tags/list" url));
-                fetch url token)
-              root [])));
+      check "selected pin"
+        (Yojson.Basic.Util.member "resolvedVersion"
+           (package (ok (prepare root [])) "deno")
+        = `String oldest));
   List.iter
     (fun (label, bytes) ->
       snapshot

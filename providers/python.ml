@@ -1,22 +1,22 @@
 module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
-module Platforms = Kiln_planning.Platforms
 module Provider = Kiln_planning.Provider
-module Registry = Kiln_planning.Registry
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
 module Support = Kiln_planning.Support
 open Result.Syntax
-module Error = Kiln_core.Error
+module Environment = Kiln_planning.Environment
 module Version = Python_version
 module Toml = Python_toml
 
 let id = "python"
 let public_name = id
+let uv_tool_version = "0.13.1"
 
 let exclude =
   [
+    "node_modules";
     ".venv";
     "venv";
     "__pycache__";
@@ -43,25 +43,36 @@ let detect source =
      else if Source.has source "main.py" then Provider.Fallback
      else Provider.No_match)
 
+type uv = { version : Version.version; image : Build_plan.image }
+
 type install =
-  | Pip_install of { requirements : bool; project : bool }
-  | Uv_install of Version.requirement list
-  | Manager_install of { manager : manager; lock : bool; install_root : bool }
+  | Pip_install of {
+      requirements : bool;
+      project : bool;
+      dependencies : string list;
+    }
+  | Uv_install of uv
+  | Manager_install of {
+      manager : manager;
+      version : Version.version;
+      lock : bool;
+      install_root : bool;
+    }
 
 and manager = Poetry | Pdm
+
+let manager_name = function Poetry -> "poetry" | Pdm -> "pdm"
 
 type inputs = Whole_source | Manifests of string list
 
 type application = {
-  platforms : Platforms.t;
   requirements : Version.requirement list;
   python_declarations : Package.requirement list;
   uv_declarations : Package.requirement list;
   manager_declarations : Package.requirement list;
-  manager_version : Version.version option;
-  fingerprint : string;
   install : install;
   inputs : inputs;
+  native : string list option;
   installable : bool;
   start : Build_plan.argv option;
   build : Build_plan.operation list;
@@ -69,21 +80,15 @@ type application = {
   install_override : Build_plan.argv option;
 }
 
-type uv = { version : Version.version; image : Build_plan.image }
-type manager_tool = { tool_version : Version.version }
-
-type installer =
-  | Pip
-  | Uv of uv
-  | Poetry_tool of manager_tool
-  | Pdm_tool of manager_tool
-
 type resolution = {
   python : Version.version;
   builder : Build_plan.image;
   runtime : Build_plan.image;
-  installer : installer;
+  installer : install;
 }
+
+let pip_arguments ~requirements ~dependencies =
+  (if requirements then [ "-r"; "requirements.txt" ] else []) @ dependencies
 
 let project source path =
   let* document = Toml.read source path in
@@ -138,7 +143,7 @@ let manager_selection source root =
   | [] -> Ok (declared, false)
 
 let manager_declarations request manager =
-  let name = match manager with Poetry -> "poetry" | Pdm -> "pdm" in
+  let name = manager_name manager in
   let declarations = Request.defaults request name [] in
   let fallback = match manager with Poetry -> "2.5.1" | Pdm -> "2.29.5" in
   let* version =
@@ -147,7 +152,7 @@ let manager_declarations request manager =
     | [ version ] -> Version.version version
     | _ :: _ :: _ -> Json.metadata name "expected one exact version override"
   in
-  Ok (name, declarations, version)
+  Ok (declarations, version)
 
 let standard_project root =
   match Toml.field root [ "project" ] Otoml.get_value with
@@ -262,16 +267,19 @@ let uv_declarations request source root =
   in
   Ok (declarations, parse)
 
-let install_inputs source install ~requirements ~project ~lock ~uv_local =
+let install_inputs source install ~requirements ~project ~lock ~uv_local
+    ~static_dependencies =
   let present = List.filter (Source.has source) in
   let manifests local paths =
     if local || source.Source.links then Whole_source
     else Manifests (List.sort_uniq String.compare paths)
   in
   match install with
-  | Pip_install { project = true; _ }
-  | Manager_install { install_root = true; _ } ->
-      Whole_source
+  | Manager_install { install_root = true; _ } -> Whole_source
+  | Pip_install { project = true; _ } ->
+      manifests
+        (project || requirements.Python_sources.local || not static_dependencies)
+        requirements.Python_sources.included
   | Pip_install { project = false; _ } ->
       manifests requirements.Python_sources.local
         requirements.Python_sources.included
@@ -376,16 +384,17 @@ let load request source =
   let uv_requirements =
     List.sort_uniq String.compare (Package.versions uv_declarations)
   in
-  let* manager_declarations, manager_version =
+  let* selected_manager =
     match manager with
-    | None -> Ok ([], None)
+    | None -> Ok None
     | Some manager ->
-        let+ _, declarations, version = manager_declarations request manager in
-        (declarations, Some (manager, version))
+        let+ declarations, version = manager_declarations request manager in
+        Some (manager, declarations, version)
   in
+  let* dependencies = Toml.strings root [ "project"; "dependencies" ] in
   let* install =
-    match (manager, lock) with
-    | Some manager, _ ->
+    match (selected_manager, lock) with
+    | Some (manager, _, version), _ ->
         let* install_root =
           match manager with
           | Poetry ->
@@ -403,20 +412,30 @@ let load request source =
               in
               Option.is_some name && Option.value ~default:true distribution
         in
-        Ok (Manager_install { manager; lock = has_lock; install_root })
+        Ok (Manager_install { manager; version; lock = has_lock; install_root })
     | None, None ->
         Ok
           (Pip_install
              {
                requirements = Source.has source "requirements.txt";
                project = installable;
+               dependencies;
              })
     | None, Some _ ->
         if not (Source.has source "pyproject.toml") then
           Json.metadata "uv.lock" "requires pyproject.toml"
         else
-          let+ requirements = Support.traverse parse_uv uv_requirements in
-          Uv_install (List.concat requirements)
+          let* requirements = Support.traverse parse_uv uv_requirements in
+          let requirements = List.concat requirements in
+          let* version, pin =
+            Package.select ~tool:"uv" ~declarations:uv_declarations
+              ~version:(fun pin -> pin.Pins.version)
+              ~parse:Version.version
+              ~accept:(fun version _ -> Version.matches requirements version)
+              Pins.uv
+          in
+          let+ image = Build_plan.image pin.Pins.image in
+          Uv_install { version; image }
   in
   let* uv_package =
     Toml.field root [ "tool"; "uv"; "package" ] (Otoml.get_boolean ~strict:true)
@@ -433,6 +452,7 @@ let load request source =
   in
   (* uv builds the root project to read dynamic metadata. *)
   let* dynamic = Toml.field root [ "project"; "dynamic" ] Otoml.get_value in
+  let* dynamic_fields = Toml.strings root [ "project"; "dynamic" ] in
   let inputs =
     if Request.replaces_install request then Whole_source
     else
@@ -440,6 +460,23 @@ let load request source =
         ~project:root_local
         ~lock:(uv_lock_local || manager_lock_local)
         ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
+        ~static_dependencies:
+          (Option.is_some name && not (List.mem "dependencies" dynamic_fields))
+  in
+  (* uv ignores pip's environment, so an index set through PIP_* stays with pip. *)
+  let pip_index =
+    List.exists
+      (String.starts_with ~prefix:"PIP_")
+      (Environment.Names.elements request.Request.secrets)
+  in
+  let native =
+    match (install, inputs) with
+    | Pip_install { requirements; dependencies; _ }, Manifests _
+      when (requirements || dependencies <> []) && not pip_index ->
+        Some (pip_arguments ~requirements ~dependencies)
+    | ( (Pip_install _ | Uv_install _ | Manager_install _),
+        (Whole_source | Manifests _) ) ->
+        None
   in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
@@ -454,48 +491,18 @@ let load request source =
           Result.map Option.some (Build_plan.argv [ "python"; "main.py" ])
         else Ok None
   in
-  let fingerprint_fields =
-    [
-      ( "python",
-        Json.string_array
-          (Package.versions file_declarations @ requirements_text) );
-      ( "installer",
-        `String
-          (match manager with
-          | Some Poetry -> "poetry"
-          | Some Pdm -> "pdm"
-          | None -> if Option.is_some lock then "uv" else "pip") );
-      ("uv", Json.string_array uv_requirements);
-    ]
-  in
-  let fingerprint_fields =
-    match manager_version with
-    | None -> fingerprint_fields
-    | Some (manager, version) ->
-        fingerprint_fields
-        @ [
-            ( "manager",
-              `String (match manager with Poetry -> "poetry" | Pdm -> "pdm") );
-            ( "managerVersion",
-              Json.string_array (Package.versions manager_declarations) );
-            ( "managerDefault",
-              `String
-                ((match manager with Poetry -> "poetry-" | Pdm -> "pdm-")
-                ^ Version.show version) );
-          ]
-  in
-  let fingerprint = Json.encode (`Assoc fingerprint_fields) in
   Ok
     {
-      platforms = request.Request.platforms;
       requirements;
       python_declarations;
       uv_declarations;
-      manager_declarations;
-      manager_version = Option.map snd manager_version;
-      fingerprint;
+      manager_declarations =
+        Option.fold ~none:[]
+          ~some:(fun (_, declarations, _) -> declarations)
+          selected_manager;
       install;
       inputs;
+      native;
       installable;
       start;
       install_override = request.Request.install;
@@ -503,121 +510,43 @@ let load request source =
       build = Request.build_command request None;
     }
 
-let startup app = app.start
-let fingerprint app = app.fingerprint
-
-let resolve ~today:_ ~fetch app =
-  let select repository requirements parse =
-    Registry.select fetch ~repository
-      ~exact:(Version.exact requirements)
-      ~parse ~compare:Version.compare
-      ~matches:(Version.matches requirements)
-      ~unavailable:
-        (Error.No_version
-           { tool = repository; requirements = "declared version constraints" })
+let resolve app =
+  let* python, toolchain =
+    Package.select ~tool:"Python" ~declarations:app.python_declarations
+      ~version:(fun pin -> pin.Pins.release)
+      ~parse:Version.version
+      ~accept:(fun version _ -> Version.matches app.requirements version)
+      Pins.python
   in
-  let* python =
-    select "library/python" app.requirements (fun tag ->
-        if String.ends_with ~suffix:"-trixie" tag then
-          Result.to_option (Version.version (String.drop_last 7 tag))
-        else None)
-  in
-  let* builder =
-    Registry.image fetch ~platforms:app.platforms ~repository:"library/python"
-      (Version.show python ^ "-trixie")
-  in
-  let* runtime =
-    Registry.image fetch ~platforms:app.platforms ~repository:"library/python"
-      (Version.show python ^ "-slim-trixie")
-  in
-  let+ installer =
-    match app.install with
-    | Pip_install _ -> Ok Pip
-    | Uv_install requirements ->
-        let* version =
-          select "astral/uv" requirements (fun tag ->
-              Result.to_option (Version.version tag))
-        in
-        let+ image =
-          Registry.image fetch ~platforms:app.platforms ~repository:"astral/uv"
-            (Version.show version)
-        in
-        Uv { version; image }
-    | Manager_install { manager = Poetry; _ } ->
-        let+ version =
-          Option.to_result ~none:Error.Invalid_resolution app.manager_version
-        in
-        Poetry_tool { tool_version = version }
-    | Manager_install { manager = Pdm; _ } ->
-        let+ version =
-          Option.to_result ~none:Error.Invalid_resolution app.manager_version
-        in
-        Pdm_tool { tool_version = version }
-  in
-  { python; builder; runtime; installer }
+  let* builder = Build_plan.image toolchain.Pins.builder in
+  let+ runtime = Build_plan.image toolchain.Pins.runtime in
+  { python; builder; runtime; installer = app.install }
 
 let encode resolved =
-  let installer =
-    match resolved.installer with
-    | Pip -> `Assoc [ ("name", `String "pip") ]
-    | Uv uv ->
-        `Assoc
-          [
-            ("name", `String "uv");
-            ("version", `String (Version.show uv.version));
-            ("image", `String (Build_plan.image_ref uv.image));
-          ]
-    | Poetry_tool tool | Pdm_tool tool ->
-        `Assoc
-          [
-            ( "name",
-              `String
-                (match resolved.installer with
-                | Poetry_tool _ -> "poetry"
-                | Pdm_tool _ -> "pdm"
-                | Pip | Uv _ -> assert false) );
-            ("version", `String (Version.show tool.tool_version));
-          ]
-  in
   `Assoc
     [
       ("python", `String (Version.show resolved.python));
       ("builder", `String (Build_plan.image_ref resolved.builder));
       ("runtime", `String (Build_plan.image_ref resolved.runtime));
-      ("installer", installer);
+      ( "installer",
+        `Assoc
+          (match resolved.installer with
+          | Pip_install _ -> [ ("name", `String "pip") ]
+          | Uv_install uv ->
+              [
+                ("name", `String "uv");
+                ("version", `String (Version.show uv.version));
+                ("image", `String (Build_plan.image_ref uv.image));
+              ]
+          | Manager_install { manager; version; _ } ->
+              [
+                ("name", `String (manager_name manager));
+                ("version", `String (Version.show version));
+              ]) );
     ]
 
-let decode value =
-  let* fields = Json.object_ "Python resolution" value in
-  let* python = Json.field "python" (Json.text Version.version) fields in
-  let* builder = Json.field "builder" (Json.text Build_plan.image) fields in
-  let* runtime = Json.field "runtime" (Json.text Build_plan.image) fields in
-  let* installer = Json.field "installer" Json.object_ fields in
-  let* name = Json.field "name" Json.string installer in
-  let+ installer =
-    match name with
-    | "pip" -> Ok Pip
-    | "uv" ->
-        let* version =
-          Json.field "version" (Json.text Version.version) installer
-        in
-        let+ image =
-          Json.field "image" (Json.text Build_plan.image) installer
-        in
-        Uv { version; image }
-    | ("poetry" | "pdm") as name ->
-        let+ version =
-          Json.field "version" (Json.text Version.version) installer
-        in
-        let tool = { tool_version = version } in
-        if name = "poetry" then Poetry_tool tool else Pdm_tool tool
-    | _ -> Error Error.Invalid_resolution
-  in
-  { python; builder; runtime; installer }
-
-let legacy _ _ = Error Error.Invalid_resolution
-
-let manager_setup app resolved name version checks install =
+let manager_setup app resolved manager version checks install =
+  let name = manager_name manager in
   match app.install_override with
   | Some _ -> Ok ([], [], [])
   | None ->
@@ -637,18 +566,17 @@ let manager_setup app resolved name version checks install =
         List.map (fun args -> name :: args) (checks @ [ install ])
       in
       let env_values =
-        match name with
-        | "poetry" ->
+        match manager with
+        | Poetry ->
             [
               ("POETRY_VIRTUALENVS_CREATE", "false");
               ("POETRY_VIRTUALENVS_IN_PROJECT", "false");
             ]
-        | "pdm" ->
+        | Pdm ->
             [
               ("PDM_PYTHON", "/opt/venv/bin/python");
               ("PDM_IGNORE_SAVED_PYTHON", "1");
             ]
-        | _ -> []
       in
       Ok
         ( [ copy tools [ "/opt/kiln-tools/" ] "/opt/kiln-tools/" ],
@@ -660,21 +588,69 @@ let uv_sync options =
   @ options
   @ [ "--python"; "/usr/local/bin/python"; "--no-managed-python" ]
 
+(* The target's own architecture appears in every platform wheel uv selects;
+   anything else in a tag came from building a source distribution here, so
+   [reset] clears the way for an install under emulation. *)
+let native_uv python ~what ~root ~reset arguments =
+  Build_plan.argv
+    ([
+       "/bin/sh";
+       "-c";
+       {|case "$TARGETARCH" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; esac
+if /opt/kiln-tools/bin/uv pip install --python /opt/venv/bin/python --python-platform "$arch-manylinux_2_40" --python-version "$0" --compile-bytecode "$@" \
+  && ! grep -hs '^Tag:' |}
+       ^ root
+       ^ {|/lib/*/site-packages/*.dist-info/WHEEL | grep -qv -e '-any$' -e "$arch"; then
+  echo "kiln: installed Python |}
+       ^ what
+       ^ {| natively for $TARGETARCH"
+else
+  echo "kiln: no native Python install of |}
+       ^ what ^ {| for $TARGETARCH; installing under emulation"
+  rm -rf |}
+       ^ root ^ "\n  " ^ reset ^ "\n  touch " ^ root ^ "/.kiln-emulate\nfi";
+       Version.show python;
+     ]
+    @ arguments)
+
+let emulated_install =
+  {|[ ! -e /opt/venv/.kiln-emulate ] || { rm /opt/venv/.kiln-emulate && python -m pip install --no-cache-dir "$@"; }|}
+
+let pip_project =
+  "python -m pip install --no-cache-dir --no-deps --prefix=/opt/kiln-project ."
+
+let overlay_project = "cp -R /opt/kiln-project/. /opt/venv/"
+
+let compile_venv =
+  Build_plan.shell "python -m compileall -qq -j 0 /opt/venv || true"
+
 let plan app resolved =
   let open Build_plan in
   let* setup, defaults, manager_environment =
-    match (app.install, resolved.installer) with
-    | Pip_install install, Pip ->
+    match app.install with
+    | Pip_install install ->
         let pip args =
           [ "python"; "-m"; "pip"; "install"; "--no-cache-dir" ] @ args
         in
+        let requirements =
+          if install.requirements then
+            [ pip (pip_arguments ~requirements:true ~dependencies:[]) ]
+          else []
+        in
         let defaults =
-          (if install.requirements then [ pip [ "-r"; "requirements.txt" ] ]
-           else [])
-          @ if install.project then [ pip [ "." ] ] else []
+          match app.inputs with
+          | Whole_source ->
+              requirements @ if install.project then [ pip [ "." ] ] else []
+          | Manifests _ when install.dependencies = [] -> requirements
+          | Manifests _ ->
+              [
+                pip
+                  (pip_arguments ~requirements:install.requirements
+                     ~dependencies:install.dependencies);
+              ]
         in
         Ok ([], defaults, [])
-    | Uv_install _, Uv uv ->
+    | Uv_install uv ->
         let* uv_stage = stage (Image uv.image) [] in
         let* env =
           environment
@@ -693,24 +669,16 @@ let plan app resolved =
           ( [ copy uv_stage [ "/uv" ] "/usr/local/bin/uv"; Env env ],
             defaults,
             [] )
-    | Manager_install { manager = Poetry; lock; install_root }, Poetry_tool tool
-      ->
-        manager_setup app resolved "poetry" tool.tool_version
+    | Manager_install { manager = Poetry; version; lock; install_root } ->
+        manager_setup app resolved Poetry version
           (if lock then [ [ "check"; "--lock" ] ] else [])
           ([ "install"; "--only"; "main"; "--no-interaction"; "--no-ansi" ]
           @ if install_root then [] else [ "--no-root" ])
-    | Manager_install { manager = Pdm; lock; install_root }, Pdm_tool tool ->
-        manager_setup app resolved "pdm" tool.tool_version []
+    | Manager_install { manager = Pdm; version; lock; install_root } ->
+        manager_setup app resolved Pdm version []
           ([ "install"; "--prod"; "--no-editable" ]
           @ (if lock then [ "--check" ] else [])
           @ if install_root then [] else [ "--no-self" ])
-    | Pip_install _, Uv _
-    | Uv_install _, Pip
-    | (Pip_install _ | Uv_install _), (Poetry_tool _ | Pdm_tool _)
-    | Manager_install _, (Pip | Uv _)
-    | Manager_install { manager = Poetry; _ }, Pdm_tool _
-    | Manager_install { manager = Pdm; _ }, Poetry_tool _ ->
-        Error Error.Invalid_resolution
   in
   let* venv = run [ "python"; "-m"; "venv"; "/opt/venv" ] in
   let* commands =
@@ -718,12 +686,23 @@ let plan app resolved =
     | Some argv -> Ok [ Run argv ]
     | None -> Support.traverse run defaults
   in
+  (* pip compiles what it installs; uv and the package managers do not. *)
+  let* compile =
+    match app.install with
+    | Pip_install _ -> Ok []
+    | Uv_install _ | Manager_install _ ->
+        let+ compile = compile_venv in
+        [ Run compile ]
+  in
   (* Dependencies installed from manifests leave the project itself for after the source copy. *)
   let* finish =
     match (app.install, app.inputs) with
     | Uv_install _, Manifests _ when app.installable ->
         let+ sync = run (uv_sync [ "--no-editable" ]) in
         [ sync ]
+    | Pip_install { project = true; _ }, Manifests _ ->
+        let+ install = shell (pip_project ^ " && " ^ overlay_project) in
+        [ Run install ]
     | ( (Pip_install _ | Uv_install _ | Manager_install _),
         (Whole_source | Manifests _) ) ->
         Ok []
@@ -751,67 +730,158 @@ let plan app resolved =
      Manifest-first builds install into a dependency stage that ends before the
      source copy, so a source edit leaves that stage's snapshot, and the venv
      copied from it, unchanged. *)
-  let* dependencies, build =
+  let* dependencies, build, finish =
     match app.inputs with
     | Whole_source ->
         let+ builder =
           stage (Image resolved.builder)
             ([ Workdir "/app"; Env env; venv ]
-            @ (copy_source :: app.install_commands (setup @ commands))
+            @ (copy_source :: app.install_commands (setup @ commands @ compile))
             @ app.build)
         in
-        (builder, builder)
+        (builder, builder, finish)
     | Manifests paths ->
+        let* install, finish =
+          match app.native with
+          | Some arguments ->
+              let* tools =
+                Support.traverse run
+                  [
+                    [ "python"; "-m"; "venv"; "/opt/kiln-tools" ];
+                    [
+                      "/opt/kiln-tools/bin/pip";
+                      "install";
+                      "--no-cache-dir";
+                      "uv==" ^ uv_tool_version;
+                    ];
+                  ]
+              in
+              let* base =
+                stage (Native resolved.builder)
+                  ([ Workdir "/app"; Env env; venv ] @ tools)
+              in
+              let* native =
+                native_uv resolved.python ~what:"dependencies" ~root:"/opt/venv"
+                  ~reset:"/usr/local/bin/python -m venv /opt/venv" arguments
+              in
+              let* installed =
+                stage (Stage base) (Source.manifests paths @ [ Run native ])
+              in
+              let* emulated =
+                argv ([ "/bin/sh"; "-c"; emulated_install; "kiln" ] @ arguments)
+              in
+              let+ finish =
+                match finish with
+                | [] -> Ok []
+                | _ :: _ ->
+                    let* native =
+                      native_uv resolved.python ~what:"project"
+                        ~root:"/opt/kiln-project"
+                        ~reset:"mkdir /opt/kiln-project"
+                        [ "--no-deps"; "--prefix=/opt/kiln-project"; "." ]
+                    in
+                    let* built =
+                      stage (Stage base) [ copy_source; Run native ]
+                    in
+                    let+ overlay =
+                      shell
+                        ("set -e; [ ! -e /opt/kiln-project/.kiln-emulate ] || \
+                          { rm /opt/kiln-project/.kiln-emulate; " ^ pip_project
+                       ^ "; }; " ^ overlay_project)
+                    in
+                    [
+                      copy built [ "/opt/kiln-project/" ] "/opt/kiln-project/";
+                      Run overlay;
+                    ]
+              in
+              ( [ copy base [ "/opt/venv/" ] "/opt/venv/" ]
+                @ app.install_commands
+                    [
+                      copy installed [ "/opt/venv/" ] "/opt/venv/";
+                      copy installed [ "/app/" ] "/app/";
+                      Run emulated;
+                    ],
+                finish )
+          | None ->
+              Ok
+                ( venv
+                  :: app.install_commands
+                       (Source.manifests paths @ setup @ commands @ compile),
+                  finish )
+        in
         let* dependencies =
-          stage (Image resolved.builder)
-            ([ Workdir "/app"; Env env; venv ]
-            @ app.install_commands (Source.manifests paths @ setup @ commands))
+          stage (Image resolved.builder) ([ Workdir "/app"; Env env ] @ install)
         in
         let+ build =
           stage (Stage dependencies) ((copy_source :: finish) @ app.build)
         in
-        (dependencies, build)
+        (dependencies, build, finish)
   in
-  (* Build commands do not change the venv of a manifest-first image; a uv
-     packaged project installs itself after the source copy, so its venv comes
-     from the build stage. *)
-  let venv_source = if finish = [] then dependencies else build in
+  (* Build commands do not change the venv of a manifest-first image. A project
+     installs itself after the source copy: a pip project to a prefix, whose few
+     files overlay the venv so a source edit leaves the venv layer unchanged, and
+     a uv packaged project into the venv, which then comes from the build stage. *)
+  let venv_source, project =
+    match (app.install, finish) with
+    | Pip_install _, _ :: _ ->
+        ( dependencies,
+          [
+            copy ~owner:(1000, 1000) build [ "/opt/kiln-project/" ] "/opt/venv/";
+          ] )
+    | (Pip_install _ | Uv_install _ | Manager_install _), [] ->
+        (dependencies, [])
+    | (Uv_install _ | Manager_install _), _ :: _ -> (build, [])
+  in
+  let* compile_stdlib =
+    run
+      [
+        "/usr/local/bin/python";
+        "-m";
+        "compileall";
+        "-q";
+        "-j";
+        "0";
+        "/usr/local/lib";
+      ]
+  in
   stage (Image resolved.runtime)
-    [
-      Workdir "/app";
-      Env env;
-      copy ~owner:(1000, 1000) venv_source [ "/opt/venv/" ] "/opt/venv/";
-      copy ~owner:(1000, 1000) build [ "/app/" ] "/app/";
-      User (1000, 1000);
-      Entrypoint None;
-      Start app.start;
-    ]
+    ([
+       Workdir "/app";
+       Env env;
+       compile_stdlib;
+       copy ~owner:(1000, 1000) venv_source [ "/opt/venv/" ] "/opt/venv/";
+     ]
+    @ project
+    @ [
+        copy ~owner:(1000, 1000) build [ "/app/" ] "/app/";
+        User (1000, 1000);
+        Entrypoint None;
+        Start app.start;
+      ])
 
 let packages app r =
   Package.resolve "python" app.python_declarations (Version.show r.python)
   ::
   (match r.installer with
-  | Pip -> []
-  | Uv uv ->
+  | Pip_install _ -> []
+  | Uv_install uv ->
       [ Package.resolve "uv" app.uv_declarations (Version.show uv.version) ]
-  | Poetry_tool tool ->
+  | Manager_install { manager; version; _ } ->
       [
-        Package.resolve "poetry" app.manager_declarations
-          (Version.show tool.tool_version);
-      ]
-  | Pdm_tool tool ->
-      [
-        Package.resolve "pdm" app.manager_declarations
-          (Version.show tool.tool_version);
+        Package.resolve (manager_name manager) app.manager_declarations
+          (Version.show version);
       ])
 
-let metadata app =
+let metadata app _ =
   [
+    ( "dependencyInstall",
+      if Option.is_some app.native then
+        "native, emulated if a package has no target wheel"
+      else "emulated" );
     ("pythonRuntime", "cpython");
     ( "pythonPackageManager",
       match app.install with
       | Pip_install _ -> "pip"
       | Uv_install _ -> "uv"
-      | Manager_install { manager = Poetry; _ } -> "poetry"
-      | Manager_install { manager = Pdm; _ } -> "pdm" );
+      | Manager_install { manager; _ } -> manager_name manager );
   ]

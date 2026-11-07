@@ -12,23 +12,10 @@ module type S = sig
   val exclude : string list
   val detect : Source.t -> (detection, Error.t) result
   val load : Request.t -> Source.t -> (application, Error.t) result
-  val startup : application -> Build_plan.argv option
-  val fingerprint : application -> string
-
-  val resolve :
-    today:string ->
-    fetch:Registry.fetch ->
-    application ->
-    (resolution, Error.t) result
-
-  val decode : Yojson.Basic.t -> (resolution, Error.t) result
+  val resolve : application -> (resolution, Error.t) result
   val encode : resolution -> Yojson.Basic.t
   val packages : application -> resolution -> Package.t list
-  val metadata : application -> (string * string) list
-
-  val legacy :
-    application -> Yojson.Basic.t -> (resolution option, Error.t) result
-
+  val metadata : application -> resolution -> (string * string) list
   val plan : application -> resolution -> (Build_plan.t, Error.t) result
 end
 

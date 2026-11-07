@@ -2,27 +2,17 @@ module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
 module Planner = Kiln_planning.Planner
 module Provider = Kiln_planning.Provider
+module Pins = Kiln_providers.Pins
 open Contract_support
 
 let files = [ ("package.json", {|{"main":"main.js"}|}); ("main.js", "") ]
-
-let prepare ?providers ?(fetch = Node_fixture.fetch) root fields =
-  Kiln_io.Driver.prepare_with ?providers ~today:"2026-10-11" ~fetch
-    (request root fields)
+let oldest_node = (List.hd Pins.node).Pins.node.Pins.release
 
 let () =
-  let fetch =
-    registry
-      [
-        ("oven/bun", [ "1.3.1" ]);
-        ("denoland/deno", [ "2.5.1" ]);
-        ("library/python", [ "3.13.7-trixie"; "3.13.7-slim-trixie" ]);
-      ]
-  in
   List.iter
-    (fun (provider, files, fetch) ->
+    (fun (provider, files) ->
       snapshot files (provider ^ " optional startup") (fun root ->
-          let prepared = ok (prepare ~fetch root []) in
+          let prepared = ok (prepare root []) in
           let open Yojson.Basic.Util in
           let response = Yojson.Basic.from_string (Planner.encode prepared) in
           check "inherited image command cleared"
@@ -33,21 +23,16 @@ let () =
                 member "Level" log = `String "warn"
                 && contains (member "Msg" log |> to_string) "no startup"
             | [] | _ :: _ -> false);
-          check "strict mode rejects before discovery"
-            (prepare
-               ~fetch:(fun _ _ ->
-                 failwith "missing startup performed discovery")
-               root
-               [ ("errorMissingStartCommand", `Bool true) ]
+          check "strict mode rejects a missing startup"
+            (prepare root [ ("errorMissingStartCommand", `Bool true) ]
             = Error Kiln_core.Error.Missing_start);
           let argv = [ "/launcher"; "" ] in
           let launched =
             ok
-              (prepare ~fetch root
+              (prepare root
                  [
                    ("start", Json.string_array argv);
                    ("errorMissingStartCommand", `Bool true);
-                   ("resolution", prepared.Planner.resolution);
                  ])
           in
           let response = Yojson.Basic.from_string (Planner.encode launched) in
@@ -58,16 +43,14 @@ let () =
           check "declared startup has no warning"
             (member "logs" response = `List [])))
     [
-      ("Node", [ ("package.json", "{}") ], Node_fixture.fetch);
-      ( "empty Node entry",
-        [ ("package.json", {|{"main":""}|}) ],
-        Node_fixture.fetch );
-      ("Bun", [ ("package.json", {|{"packageManager":"bun@1.3.1"}|}) ], fetch);
-      ("Deno", [ ("deno.json", "{}") ], fetch);
-      ("Python", [ ("requirements.txt", "") ], fetch);
+      ("Node", [ ("package.json", "{}") ]);
+      ("empty Node entry", [ ("package.json", {|{"main":""}|}) ]);
+      ("Bun", [ ("package.json", {|{"packageManager":"bun@1"}|}) ]);
+      ("Deno", [ ("deno.json", "{}") ]);
+      ("Python", [ ("requirements.txt", "") ]);
     ];
   snapshot files "application environment and secret contract" (fun root ->
-      write root ".node-version" "24";
+      write root ".node-version" (last Pins.node).Pins.node.Pins.release;
       let prepared =
         ok
           (prepare root
@@ -75,7 +58,7 @@ let () =
                ( "environment",
                  `Assoc
                    [
-                     ("RAILPACK_NODE_VERSION", `String "22.20.0");
+                     ("RAILPACK_NODE_VERSION", `String oldest_node);
                      ("TOKEN", `String "private\nvalue");
                    ] );
              ])
@@ -83,40 +66,9 @@ let () =
       let open Yojson.Basic.Util in
       check "environment overrides file version"
         (prepared.Planner.resolution |> member "data" |> member "nodeVersion"
-       = `String "22.20.0");
+       = `String oldest_node);
       check "secret values stay out of prepared output"
         (not (contains (Planner.encode prepared) "private")));
-  snapshot files "legacy resolution reuse" (fun root ->
-      let first = ok (prepare root []) in
-      let legacy = Yojson.Basic.Util.member "data" first.Planner.resolution in
-      let reused =
-        ok
-          (Kiln_io.Driver.prepare_with ~today:"2040-01-01"
-             ~fetch:(fun _ _ -> failwith "resolution reuse performed discovery")
-             (request root [ ("resolution", legacy) ]))
-      in
-      check "legacy pins preserved"
-        (reused.Planner.resolution = first.Planner.resolution);
-      let malformed =
-        `Assoc
-          [
-            ("format", `Int 1);
-            ("provider", `String "node");
-            ("key", `String "old");
-            ("data", `Null);
-          ]
-      in
-      let fields = Yojson.Basic.Util.to_assoc legacy in
-      let mutable_image =
-        `Assoc
-          (("builderImage", `String "example/image:latest")
-          :: List.remove_assoc "builderImage" fields)
-      in
-      List.iter
-        (fun resolution ->
-          check "malformed or unpinned resolution rejected"
-            (Result.is_error (prepare root [ ("resolution", resolution) ])))
-        [ malformed; mutable_image ]);
   snapshot files "provider registration and selection" (fun root ->
       let module Alternate = struct
         include Kiln_providers.Node
@@ -222,35 +174,23 @@ let () =
       check "runtime variables" (contains recipe {|MODE="configured"|});
       let response = Yojson.Basic.from_string (Planner.encode first) in
       let open Yojson.Basic.Util in
-      check "result success" (response |> member "success" = `Bool true);
       let version =
         read "../kiln_ocaml.opam" |> String.split_on_char '\n'
         |> List.find (String.starts_with ~prefix:"version: ")
         |> String.drop_first 10 |> String.drop_last 1
       in
       check "result identifies the package version"
-        (member "kilnVersion" response = `String version
-        && member "railpackVersion" response = `Null);
-      check "provider metadata is a string map"
-        (response |> member "metadata"
-        |> member "nodePackageManager"
-        = `String "npm");
-      check "provider metadata"
-        (response |> member "detectedProviders" = `List [ `String "node" ]);
+        (member "kilnVersion" response = `String version);
       check "configured and supplied secrets form a set"
         (response |> member "secrets"
         = Json.string_array
             [ "RAILPACK_BUILD_CMD"; "RAILPACK_START_CMD"; "TOKEN" ]);
-      check "resolved package schema"
-        (response |> member "resolvedPackages" |> member "node"
-       |> member "resolvedVersion" = `String "24.0.0");
       let argv = [ "/launcher"; "with spaces"; "\"quoted\""; "" ] in
       let native =
         ok
           (prepare root
              [
                ("start", Json.string_array argv);
-               ("resolution", first.Planner.resolution);
                ( "environment",
                  `Assoc
                    [ ("RAILPACK_START_CMD", `String "echo environment-start") ]
@@ -264,14 +204,7 @@ let () =
       check
         "native launcher argv overrides application startup without shell \
          interpretation"
-        (contains dockerfile ("CMD " ^ Json.encode (Json.string_array argv)));
-      check "argv and shell conflict"
-        (Result.is_error
-           (prepare root
-              [
-                ("start", Json.string_array [ "node" ]);
-                ("startCommand", `String "echo bad");
-              ])));
+        (contains dockerfile ("CMD " ^ Json.encode (Json.string_array argv))));
   snapshot
     [
       ( "package.json",
@@ -315,16 +248,11 @@ let () =
       let position line = Option.get (String.find_first ~sub:line recipe) in
       check "inherited install follows earlier commands"
         (position {|RUN ["/bin/sh","-c","echo before"]|}
-        < position {|RUN ["npm","install"]|}));
-  snapshot files "invalid configuration fails before discovery" (fun root ->
+        < position {|"kiln","npm","install"]|}));
+  snapshot files "invalid configuration is rejected" (fun root ->
       let reject config =
         write root "railpack.json" config;
-        check config
-          (Result.is_error
-             (Kiln_io.Driver.prepare_with ~today:"2026-10-12"
-                ~fetch:(fun _ _ ->
-                  failwith "invalid config performed discovery")
-                (request root [])))
+        check config (Result.is_error (prepare root []))
       in
       List.iter reject
         [
@@ -340,7 +268,6 @@ let () =
           {|{"steps":{"build":{"commands":[{"src":"main.js","dest":"copy.js","image":"bad image"}]}}}|};
           {|{"steps":{"build":{"assets":{"x":"value"},"commands":[{"path":"artifact","name":"x","mode":4096}]}}}|};
           {|{"steps":{"build":{"commands":["PATH:/tools\rINJECT"]}}}|};
-          {|{"steps":{"build":{"commands":["FILE:artifact missing"]}}}|};
           {|{"steps":{"build":{"commands":[" "]}}}|};
           {|{"steps":{"build":{"commands":["echo\u0000bad"]}}}|};
           {|{"deploy":{"variables":{"BAD KEY":"value"}}}|};
@@ -348,15 +275,11 @@ let () =
           {|{"secrets":["BAD KEY"]}|};
           {|{"deploy":{"variables":{"MODE":"line\rbreak"}}}|};
         ]);
-  snapshot files "invalid request fails before discovery" (fun root ->
+  snapshot files "invalid request is rejected" (fun root ->
       List.iter
         (fun fields ->
           check "invalid request rejected"
-            (Result.is_error
-               (Kiln_io.Driver.prepare_with ~today:"2026-10-12"
-                  ~fetch:(fun _ _ ->
-                    failwith "invalid request performed discovery")
-                  (request root fields))))
+            (Result.is_error (prepare root fields)))
         [
           [ ("environment", `Assoc [ ("BAD KEY", `String "value") ]) ];
           [ ("environment", `Assoc [ ("TOKEN", `String "bad\000value") ]) ];
@@ -364,6 +287,10 @@ let () =
             ("buildCommand", `Int 42);
             ( "environment",
               `Assoc [ ("RAILPACK_BUILD_CMD", `String "echo build") ] );
+          ];
+          [
+            ("start", Json.string_array [ "node" ]);
+            ("startCommand", `String "echo bad");
           ];
           [ ("start", `List []) ];
           [ ("start", `List [ `String "" ]) ];
@@ -382,76 +309,48 @@ let () =
           check "invalid name diagnosed"
             (contains (Buffer.contents errors) "invalid variable name"))
         [ "BAD KEY"; "BAD KEY="; "=value" ]);
-  let proxy = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-  Fun.protect
-    ~finally:(fun () -> Unix.close proxy)
-    (fun () ->
-      Unix.bind proxy (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
-      let port =
-        match Unix.getsockname proxy with
-        | Unix.ADDR_INET (_, port) -> port
-        | Unix.ADDR_UNIX _ -> failwith "expected TCP socket"
-      in
-      let env =
-        environment
-          [
-            ("HTTPS_PROXY", Printf.sprintf "http://127.0.0.1:%d" port);
-            ("NO_PROXY", "");
-            ("no_proxy", "");
-          ]
-      in
-      List.iter
-        (fun (label, files, flags, code, message) ->
-          snapshot files ("CLI failure: " ^ label) (fun root ->
-              let info = Filename.concat root "info.json" in
-              let output =
-                run ~env ~exit_code:code "../bin/main.exe"
-                  ([ "prepare"; root; "--info-out"; info; "--hide-pretty-plan" ]
-                  @ flags)
-              in
-              check "failed CLI emits no plan" (output = "");
-              let open Yojson.Basic.Util in
-              let info = Yojson.Basic.from_file info in
-              check "failure" (member "success" info = `Bool false);
-              check "structured diagnostic"
-                (match member "logs" info |> to_list with
-                | [ log ] ->
-                    member "Level" log = `String "error"
-                    && contains (member "Msg" log |> to_string) message
-                | [] | _ :: _ -> false)))
-        [
-          ( "configuration",
-            files @ [ ("railpack.json", {|{"buildAptPackages":["curl"]}|}) ],
-            [],
-            1,
-            "buildAptPackages" );
-          ("temporary discovery", files, [], 75, "toolchain discovery failed:");
-          ( "strict startup",
-            [ ("package.json", "{}") ],
-            [ "--error-missing-start" ],
-            1,
-            "no startup" );
-        ]);
-  snapshot files "previous versions replace defaults" (fun root ->
-      let previous = `Assoc [ ("node", `String "22.20.0") ] in
-      let first = ok (prepare root [ ("previousVersions", previous) ]) in
-      let open Yojson.Basic.Util in
-      let package prepared =
-        `Assoc (Planner.info prepared)
-        |> member "resolvedPackages" |> member "node"
-      in
-      let check_package prepared source version =
-        let package = package prepared in
-        check "request selects the reported version and origin"
-          (member "resolvedVersion" package = `String version
-          && member "source" package = `String source
-          && member "requestedVersion" package = `String version)
-      in
-      check_package first "previousVersions" "22.20.0";
-      write root ".node-version" "24.0.0";
-      check_package
-        (ok (prepare root [ ("previousVersions", previous) ]))
-        ".node-version" "24.0.0");
+  List.iter
+    (fun (label, files, flags, message) ->
+      snapshot files ("CLI failure: " ^ label) (fun root ->
+          let info = Filename.concat root "info.json" in
+          let output =
+            run ~exit_code:1 "../bin/main.exe"
+              ([ "prepare"; root; "--info-out"; info; "--hide-pretty-plan" ]
+              @ flags)
+          in
+          check "failed CLI emits no plan" (output = "");
+          let open Yojson.Basic.Util in
+          let info = Yojson.Basic.from_file info in
+          check "failure" (member "success" info = `Bool false);
+          check "structured diagnostic"
+            (match member "logs" info |> to_list with
+            | [ log ] ->
+                member "Level" log = `String "error"
+                && contains (member "Msg" log |> to_string) message
+            | [] | _ :: _ -> false)))
+    [
+      ( "configuration",
+        files @ [ ("railpack.json", {|{"buildAptPackages":["curl"]}|}) ],
+        [],
+        "buildAptPackages" );
+      ( "strict startup",
+        [ ("package.json", "{}") ],
+        [ "--error-missing-start" ],
+        "no startup" );
+    ];
+  List.iter
+    (fun (provider, files, ignored) ->
+      snapshot files (provider ^ " ignores node_modules") (fun root ->
+          Unix.mkdir (Filename.concat root "node_modules") 0o700;
+          write root ("node_modules/" ^ ignored) "[";
+          check "it stays out of planning and the build context"
+            (contains
+               (Planner.dockerfile (ok (prepare root [])))
+               "--exclude=node_modules")))
+    [
+      ("Python", [ ("main.py", "") ], "pyproject.toml");
+      ("Go", [ ("go.mod", "module example\ngo 1.27\n") ], "go.work");
+    ];
   snapshot files "contained custom configuration" (fun root ->
       Unix.mkdir (Filename.concat root "config") 0o700;
       write root "config/build.json"

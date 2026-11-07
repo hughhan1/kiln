@@ -1,13 +1,7 @@
 module Planner = Kiln_planning.Planner
 module Build_plan = Kiln_planning.Build_plan
+module Pins = Kiln_providers.Pins
 open Contract_support
-
-let fetch =
-  registry
-    [ ("oven/bun", [ "1.2.9"; "1.3.1"; "1.3.2"; "1.4.0-canary.1"; "slim" ]) ]
-
-let prepare ?(fetch = fetch) root fields =
-  Kiln_io.Driver.prepare_with ~today:"2026-10-12" ~fetch (request root fields)
 
 let () =
   snapshot
@@ -23,60 +17,31 @@ let () =
         (selected.Planner.resolution = first.Planner.resolution
         && Yojson.Basic.Util.member "detectedProviders"
              (`Assoc (Planner.info selected))
-           = `List [ `String "node" ]);
-      check "stable version"
-        (Yojson.Basic.Util.(
-           first.Planner.resolution |> member "data" |> member "version")
-        = `String "1.3.2");
-      write root "package.json" {|{"main":"other.ts"}|};
-      let reused =
-        ok
-          (prepare
-             ~fetch:(fun _ _ -> failwith "offline discovery")
-             root
-             [ ("resolution", first.Planner.resolution) ])
-      in
-      check "startup edits retain toolchain"
-        (first.Planner.resolution = reused.Planner.resolution));
+           = `List [ `String "node" ]));
+  let oldest = (List.hd Pins.bun).Pins.version in
   snapshot
     [
       ( "package.json",
-        {|{"packageManager":"bun@1.3.1","engines":{"bun":">=1.3 <1.4"},"scripts":{"start":"bun main.ts"}}|}
-      );
+        Printf.sprintf
+          {|{"packageManager":"bun@%s","engines":{"bun":">=1"},"scripts":{"start":"bun main.ts"}}|}
+          oldest );
     ]
-    "Bun intersects declarations without tag enumeration"
+    "Bun intersects declarations"
     (fun root ->
-      let fetch url token =
-        check "exact version skips tags"
-          (not (String.ends_with ~suffix:"/tags/list" url));
-        fetch url token
-      in
-      let plan = ok (prepare ~fetch root []) in
+      let plan = ok (prepare root []) in
       check "declared startup"
         (Option.map Build_plan.arguments (Build_plan.startup plan.Planner.plan)
         = Some [ "bun"; "run"; "start" ]);
       write root "package.json"
-        {|{"engines":{"bun":">=1.3 <1.4"},"scripts":{"start":"bun main.ts"}}|};
-      write root ".bun-version" "1.3.1";
-      let reused =
-        ok
-          (prepare
-             ~fetch:(fun _ _ ->
-               failwith "unchanged constraints performed discovery")
-             root
-             [ ("resolution", plan.Planner.resolution) ])
-      in
+        {|{"engines":{"bun":">=1"},"scripts":{"start":"bun main.ts"}}|};
+      write root ".bun-version" oldest;
       let open Yojson.Basic.Util in
-      let package =
-        `Assoc (Planner.info reused)
-        |> member "resolvedPackages" |> member "bun"
-      in
-      check "reused versions report the current declaration origins"
-        (member "requestedVersion" package = `String "1.3.1 && >=1.3 <1.4"
+      let package = package (ok (prepare root [])) "bun" in
+      check "the plan reports the declaration origins"
+        (member "resolvedVersion" package = `String oldest
+        && member "requestedVersion" package = `String (oldest ^ " && >=1")
         && member "source" package
-           = `String ".bun-version, package.json engines.bun");
-      write root ".bun-version" "1.2.9";
-      check "conflicting versions rejected" (Result.is_error (prepare root [])));
+           = `String ".bun-version, package.json engines.bun"));
   snapshot
     [
       ("package.json", {|{"packageManager":"npm@10","main":"main.js"}|});
@@ -90,7 +55,7 @@ let () =
   snapshot
     [
       ( "package.json",
-        {|{"packageManager":"bun@1.3.1","workspaces":["../outside"],"main":"main.ts"}|}
+        {|{"packageManager":"bun@1","workspaces":["../outside"],"main":"main.ts"}|}
       );
     ]
     "Bun workspaces are contained"

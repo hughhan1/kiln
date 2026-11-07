@@ -8,15 +8,12 @@ type t = {
   secrets : Environment.Names.t;
   install : Build_plan.argv option;
   install_steps : Commands.t option;
-  platforms : Platforms.t;
   start : startup option;
   error_missing_start : bool;
   provider : string option;
   build : Commands.t option;
   config_file : string;
   variables : Build_plan.environment option;
-  previous : Yojson.Basic.t option;
-  previous_versions : (string * string) list;
 }
 
 let prefer value fallback =
@@ -60,11 +57,19 @@ let decode fields =
   let* install = configured "INSTALL_CMD" Build_plan.shell None in
   let* source = Json.field "source" Json.string fields in
   let* platforms =
-    Json.field "platforms"
-      (Json.default [ Default_platform.name ] (Json.list Json.string))
-      fields
+    Json.field "platforms" (Json.optional (Json.list Json.string)) fields
   in
-  let* platforms = Platforms.of_strings platforms in
+  let* () =
+    let supported = [ "linux/amd64"; "linux/arm64"; "linux/arm64/v8" ] in
+    match platforms with
+    | None -> Ok ()
+    | Some values
+      when values <> [] && List.for_all (fun v -> List.mem v supported) values
+      ->
+        Ok ()
+    | Some _ ->
+        Json.metadata "platforms" "must contain linux/amd64 and/or linux/arm64"
+  in
   let* error_missing_start =
     Json.field "errorMissingStartCommand"
       (Json.default false Json.boolean)
@@ -89,30 +94,19 @@ let decode fields =
       fields
   in
   let config_file = Option.value ~default:config_file (config "CONFIG_FILE") in
-  let* provider = Json.field "provider" (Json.optional Json.string) fields in
-  let* previous_versions =
-    Json.field "previousVersions"
-      (Json.default [] (Json.assoc Json.string))
-      fields
-  in
-  let+ previous =
-    Json.field "resolution" (Json.optional (fun _ value -> Ok value)) fields
-  in
+  let+ provider = Json.field "provider" (Json.optional Json.string) fields in
   {
     source;
     environment;
     secrets = Environment.names environment;
     install;
     install_steps = None;
-    platforms;
     start;
     error_missing_start;
     provider;
     build;
     config_file;
     variables = None;
-    previous;
-    previous_versions;
   }
 
 let build_command request default =
@@ -232,9 +226,4 @@ let defaults request name declarations =
           ("RAILPACK_" ^ String.uppercase_ascii name ^ "_VERSION")
           value;
       ]
-  | None -> (
-      match declarations with
-      | [] ->
-          Package.optional "previousVersions"
-            (List.assoc_opt name request.previous_versions)
-      | _ :: _ -> declarations)
+  | None -> declarations

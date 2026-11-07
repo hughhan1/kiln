@@ -1,13 +1,6 @@
 (library
  (name kiln_planning)
- (libraries kiln_core yojson digestif angstrom))
-
-(rule
- (target default_platform.ml)
- (action
-  (with-stdout-to
-   %{target}
-   (echo "let name = \"linux/%{architecture}\"\n"))))
+ (libraries kiln_core yojson angstrom))
 
 (rule
  (target version.ml)
