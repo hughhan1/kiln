@@ -145,7 +145,7 @@ let manager_selection source root =
 let manager_declarations request manager =
   let name = manager_name manager in
   let declarations = Request.defaults request name [] in
-  let fallback = match manager with Poetry -> "2.5.1" | Pdm -> "2.29.5" in
+  let fallback = match manager with Poetry -> "2.5.1" | Pdm -> "2.29.7" in
   let* version =
     match Package.versions declarations with
     | [] -> Version.version fallback

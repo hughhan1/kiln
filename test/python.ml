@@ -504,7 +504,7 @@ let () =
         "\"poetry\",\"check\",\"--lock\"" );
       ( "pdm",
         "pdm.lock",
-        "2.29.5",
+        "2.29.7",
         "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"",
         "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"" );
     ];
