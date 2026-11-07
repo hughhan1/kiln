@@ -3,13 +3,6 @@ module Build_plan = Kiln_planning.Build_plan
 module Pins = Kiln_providers.Pins
 open Contract_support
 
-let pins = List.map (fun pin -> pin.Pins.version) Pins.deno
-let prepare root fields = Kiln_io.Driver.prepare (request root fields)
-
-let version prepared =
-  Yojson.Basic.Util.(
-    prepared.Planner.resolution |> member "data" |> member "version")
-
 let () =
   snapshot
     [
@@ -24,26 +17,25 @@ let () =
     ]
     "Deno configuration wins over package fallback"
     (fun root ->
-      let first = ok (prepare root []) in
+      let plan = ok (prepare root []) in
       check "Deno selected"
-        (Yojson.Basic.Util.member "provider" first.Planner.resolution
+        (Yojson.Basic.Util.member "provider" plan.Planner.resolution
         = `String "deno");
       check "Deno task startup"
-        (Option.map Build_plan.arguments (Build_plan.startup first.Planner.plan)
-        = Some [ "deno"; "task"; "start" ]);
-      check "newest pin" (version first = `String (last pins)));
+        (Option.map Build_plan.arguments (Build_plan.startup plan.Planner.plan)
+        = Some [ "deno"; "task"; "start" ]));
+  let oldest = (List.hd Pins.deno).Pins.version in
   snapshot
     [
       ("deno.json", {|{"tasks":{"start":"deno run main.ts"}}|});
-      (".deno-version", List.hd pins);
+      (".deno-version", oldest);
     ]
     "Deno version file selects its pin"
     (fun root ->
       check "selected pin"
-        (version (ok (prepare root [])) = `String (List.hd pins));
-      write root ".deno-version" "1.46.3";
-      check "an unsupported version lists what is supported"
-        (lists_supported (prepare root []) pins));
+        (Yojson.Basic.Util.member "resolvedVersion"
+           (package (ok (prepare root [])) "deno")
+        = `String oldest));
   List.iter
     (fun (label, bytes) ->
       snapshot

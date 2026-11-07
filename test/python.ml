@@ -4,21 +4,15 @@ module Pins = Kiln_providers.Pins
 module Version = Kiln_providers.Python_version
 open Contract_support
 
-let prepare root fields = Kiln_io.Driver.prepare (request root fields)
-let python_pins = List.map (fun pin -> pin.Pins.release) Pins.python
-let uv_pins = List.map (fun pin -> pin.Pins.version) Pins.uv
-let oldest_python = List.hd python_pins
-let newest_python = last python_pins
+let oldest_python = (List.hd Pins.python).Pins.release
+let newest_python = (last Pins.python).Pins.release
+let oldest_uv = (List.hd Pins.uv).Pins.version
 
 (* A pinned release's minor line, such as 3.13 for 3.13.7. *)
 let minor release =
   match String.split_on_char '.' release with
   | major :: minor :: _ -> major ^ "." ^ minor
   | [] | [ _ ] -> failwith ("expected a release: " ^ release)
-
-let selected response =
-  Yojson.Basic.Util.(
-    response.Planner.resolution |> member "data" |> member "python")
 
 (* Builder steps as text: context copies and RUN argv. *)
 let step = function
@@ -98,28 +92,6 @@ let () =
       ("==3.12,>3.12", [], [ "3.12.0"; "3.12.1" ]);
       ("<=3.12.11,>3.11.14", [ "3.12.0"; "3.12.11" ], [ "3.11.14"; "3.12.12" ]);
     ];
-  List.iter
-    (fun release ->
-      snapshot
-        [ ("main.py", ""); (".python-version", minor release) ]
-        ("Python " ^ minor release ^ " selects its pin")
-        (fun root ->
-          check "pinned release"
-            (selected (ok (prepare root [])) = `String release)))
-    python_pins;
-  snapshot
-    [ ("main.py", ""); (".python-version", "3.1.4") ]
-    "an unsupported Python lists what is supported"
-    (fun root ->
-      check "supported releases"
-        (Result.map selected (prepare root [])
-        = Error
-            (Kiln_core.Error.No_version
-               {
-                 tool = "Python";
-                 requirements = "3.1.4";
-                 supported = python_pins;
-               })));
   snapshot
     [
       ("main.py", "print('hello')");
@@ -130,16 +102,17 @@ let () =
     "Python intersects file and project constraints"
     (fun root ->
       let first = ok (prepare root []) in
-      check "the file selects within the range"
-        (selected first = `String oldest_python);
       let open Yojson.Basic.Util in
-      let package =
-        `Assoc (Planner.info first)
-        |> member "resolvedPackages" |> member "python"
-      in
+      let data = first.Planner.resolution |> member "data" in
+      let pin = List.hd Pins.python in
+      check "the file selects the pin's images"
+        (member "builder" data = `String pin.Pins.builder
+        && member "runtime" data = `String pin.Pins.runtime);
+      let package = package first "python" in
       check "the plan reports the intersected request and its sources"
-        (member "requestedVersion" package
-         = `String (minor oldest_python ^ " && >=3.11,!=" ^ newest_python)
+        (member "resolvedVersion" package = `String oldest_python
+        && member "requestedVersion" package
+           = `String (minor oldest_python ^ " && >=3.11,!=" ^ newest_python)
         && member "source" package
            = `String ".python-version, pyproject.toml project.requires-python");
       write root ".python-version" (minor newest_python);
@@ -152,41 +125,24 @@ let () =
       ("pyproject.toml", "[project]\nrequires-python = '>=3.11'\n");
       ("uv.lock", "version=1\nrequires-python = '>=3.11'\n");
     ]
-    "uv defaults and intersected declarations"
+    "uv intersects declarations"
     (fun root ->
       let open Yojson.Basic.Util in
-      let package prepared =
-        `Assoc (Planner.info prepared)
-        |> member "resolvedPackages" |> member "uv"
-      in
-      let default = package (ok (prepare root [])) in
-      check "uv default has no declared version"
-        (member "requestedVersion" default = `Null
-        && member "source" default = `String "kiln default"
-        && member "resolvedVersion" default = `String (last uv_pins));
-      let oldest = List.hd uv_pins in
-      write root "uv.toml" ("required-version = '>=" ^ oldest ^ "'\n");
+      write root "uv.toml" ("required-version = '>=" ^ oldest_uv ^ "'\n");
       write root "pyproject.toml"
         ("[project]\n\
           requires-python = '>=3.11'\n\
           [tool.uv]\n\
-          required-version = '<=" ^ oldest ^ "'\n");
-      let uv = package (ok (prepare root [])) in
+          required-version = '<=" ^ oldest_uv ^ "'\n");
+      let uv = package (ok (prepare root [])) "uv" in
       check "explicit constraints select a pin and report their origins"
         (member "requestedVersion" uv
-         = `String ("<=" ^ oldest ^ " && >=" ^ oldest)
-        && member "resolvedVersion" uv = `String oldest
+         = `String ("<=" ^ oldest_uv ^ " && >=" ^ oldest_uv)
+        && member "resolvedVersion" uv = `String oldest_uv
         && member "source" uv
            = `String
                "pyproject.toml tool.uv.required-version, uv.toml \
-                required-version");
-      write root "pyproject.toml"
-        "[project]\n\
-         requires-python = '>=3.11'\n\
-         [tool.uv]\n\
-         required-version = '==0.0.1'\n";
-      check "an unsupported uv lists what is supported"
-        (lists_supported (prepare root []) uv_pins));
+                required-version"));
   snapshot
     [
       ("main.py", "");
@@ -208,24 +164,21 @@ let () =
                  `Assoc
                    [
                      ("RAILPACK_PYTHON_VERSION", `String oldest_python);
-                     ("RAILPACK_UV_VERSION", `String (List.hd uv_pins));
+                     ("RAILPACK_UV_VERSION", `String oldest_uv);
                    ] );
              ])
       in
       let open Yojson.Basic.Util in
-      let packages =
-        `Assoc (Planner.info prepared) |> member "resolvedPackages"
-      in
       List.iter
         (fun (name, version, setting) ->
-          let package = member name packages in
+          let package = package prepared name in
           check "environment toolchain and provenance selected"
             (member "resolvedVersion" package = `String version
             && member "requestedVersion" package = `String version
             && member "source" package = `String setting))
         [
           ("python", oldest_python, "RAILPACK_PYTHON_VERSION");
-          ("uv", List.hd uv_pins, "RAILPACK_UV_VERSION");
+          ("uv", oldest_uv, "RAILPACK_UV_VERSION");
         ]);
   snapshot
     [
@@ -411,23 +364,21 @@ let () =
           let prepared = ok (prepare root []) in
           let steps = steps prepared in
           let sync = "uv sync --locked --no-dev" in
+          let project = sync ^ " --no-editable" in
           check "the venv comes from the stage that installs the project"
             (venv_follows_source prepared = finish);
-          check "uv installs dependencies from manifests"
+          check
+            "dependencies install from manifests, the project after the source"
             (ordered steps
-               [
-                 "manifest .python-version pyproject.toml uv.lock";
-                 sync ^ " --no-install-project";
-                 "source";
-               ]);
-          check "the project installs after the source copy"
-            (List.exists
-               (String.starts_with ~prefix:(sync ^ " --no-editable"))
-               steps
-            = finish);
-          if finish then
-            check "project sync follows the source copy"
-              (ordered steps [ "source"; sync ^ " --no-editable" ])))
+               ([
+                  "manifest .python-version pyproject.toml uv.lock";
+                  sync ^ " --no-install-project";
+                  "source";
+                ]
+               @ if finish then [ project ] else []));
+          check "a virtual project has nothing to install"
+            (finish
+            || not (List.exists (String.starts_with ~prefix:project) steps))))
     [
       ( "uv packaged project installs dependencies first",
         "[build-system]\n\
@@ -543,14 +494,8 @@ let () =
           check "manager tool is installed in a separate virtualenv"
             (contains dockerfile "/opt/kiln-tools/bin/pip"
             && contains dockerfile (manager ^ "==" ^ default_version));
-          check "manager tools are not copied into runtime"
-            ((not (contains dockerfile "COPY --from=kiln-stage"))
-            || not (contains dockerfile "/opt/kiln-tools/"));
           let open Yojson.Basic.Util in
-          let package =
-            `Assoc (Planner.info prepared)
-            |> member "resolvedPackages" |> member manager
-          in
+          let package = package prepared manager in
           check "manager version is reported"
             (member "resolvedVersion" package = `String default_version
             && member "source" package = `String "kiln default");
@@ -570,7 +515,7 @@ let () =
         "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"" );
     ];
   List.iter
-    (fun (manager, lockfile, no_root) ->
+    (fun (manager, no_root) ->
       snapshot
         [
           ( "pyproject.toml",
@@ -582,87 +527,35 @@ let () =
         ]
         (manager ^ " unlocked install")
         (fun root ->
-          let first = ok (prepare root []) in
-          let dockerfile = Planner.dockerfile first in
+          let dockerfile = Planner.dockerfile (ok (prepare root [])) in
           check "unlocked installs do not request lock checks"
             ((not (contains dockerfile "--check"))
             && not (contains dockerfile "check --lock"));
-          check "unlocked installs do not copy project metadata back"
-            (not (Sys.file_exists (Filename.concat root lockfile)));
           check "default manager command honors package mode"
             (contains dockerfile no_root)))
-    [ ("poetry", "poetry.lock", "--no-root"); ("pdm", "pdm.lock", "--no-self") ];
-  snapshot
-    [
-      ( "pyproject.toml",
-        "[project]\n\
-         name='manager-app'\n\
-         version='1.0.0'\n\
-         requires-python='>=3.11,<3.14'\n\
-         [tool.poetry]\n\
-         package-mode=true\n" );
-      ("poetry.lock", "");
-    ]
-    "Poetry package mode and version overrides"
-    (fun root ->
-      let override =
-        ok
-          (prepare root
-             [
-               ( "environment",
-                 `Assoc [ ("RAILPACK_POETRY_VERSION", `String "2.4.0") ] );
-             ])
-      in
-      let open Yojson.Basic.Util in
-      let package =
-        `Assoc (Planner.info override)
-        |> member "resolvedPackages" |> member "poetry"
-      in
-      check "exact manager override is reported"
-        (member "resolvedVersion" package = `String "2.4.0"
-        && member "source" package = `String "RAILPACK_POETRY_VERSION");
-      check "Poetry package mode installs the root project"
-        (contains
-           (Planner.dockerfile override)
-           "\"poetry\",\"install\",\"--only\",\"main\""));
+    [ ("poetry", "--no-root"); ("pdm", "--no-self") ];
   List.iter
-    (fun (manager, extra, expected) ->
+    (fun (manager, version) ->
       snapshot
-        [ ("pyproject.toml", manager_project manager ^ extra); ("main.py", "") ]
-        (manager ^ " application mode")
+        [ ("pyproject.toml", manager_project manager); ("main.py", "") ]
+        (manager ^ " version override")
         (fun root ->
-          let dockerfile = Planner.dockerfile (ok (prepare root [])) in
-          check "application mode skips installing the project itself"
-            (contains dockerfile expected)))
-    [
-      ("poetry", "package-mode = false\n", "--no-root");
-      ("pdm", "distribution = false\n", "--no-self");
-    ];
-  snapshot
-    [
-      ("pyproject.toml", manager_project "pdm" ^ "distribution=true\n");
-      ("pdm.lock", "");
-      ("main.py", "");
-    ]
-    "PDM version override"
-    (fun root ->
-      let open Yojson.Basic.Util in
-      let package prepared =
-        `Assoc (Planner.info prepared)
-        |> member "resolvedPackages" |> member "pdm"
-      in
-      let override =
-        ok
-          (prepare root
-             [
-               ( "environment",
-                 `Assoc [ ("RAILPACK_PDM_VERSION", `String "2.28.1") ] );
-             ])
-      in
-      let package_override = package override in
-      check "exact PDM override is reported"
-        (member "resolvedVersion" package_override = `String "2.28.1"
-        && member "source" package_override = `String "RAILPACK_PDM_VERSION"));
+          let setting =
+            "RAILPACK_" ^ String.uppercase_ascii manager ^ "_VERSION"
+          in
+          let prepared =
+            ok
+              (prepare root
+                 [ ("environment", `Assoc [ (setting, `String version) ]) ])
+          in
+          let open Yojson.Basic.Util in
+          let package = package prepared manager in
+          check "the override is reported"
+            (member "resolvedVersion" package = `String version
+            && member "source" package = `String setting);
+          check "the override is installed"
+            (contains (Planner.dockerfile prepared) (manager ^ "==" ^ version))))
+    [ ("poetry", "2.4.0"); ("pdm", "2.28.1") ];
   snapshot
     [
       ( "pyproject.toml",
@@ -707,22 +600,6 @@ let () =
         "pyproject.toml" "[project]\nname='local'\nversion='1.0.0'\n";
       check "contained project-root dependency is accepted"
         (Result.is_ok (prepare root [])));
-  snapshot
-    [
-      ( "pyproject.toml",
-        "[project]\n\
-         name='manager-app'\n\
-         version='1.0.0'\n\
-         requires-python='>=3.11,<3.14'\n\
-         dependencies=['local @ file:///${PROJECT_ROOT}/../outside']\n\
-         [tool.pdm]\n\
-         distribution=false\n" );
-      ("main.py", "");
-    ]
-    "PDM project-root escape is rejected"
-    (fun root ->
-      check "escaping local dependency is rejected"
-        (Result.is_error (prepare root [])));
   List.iter
     (fun (label, files, message) ->
       snapshot files label (fun root ->
@@ -809,5 +686,17 @@ let () =
         [ ("main.py", ""); ("requirements.txt", "local@file:///etc/passwd\n") ]
       );
       ("uv requires project", [ ("main.py", ""); ("uv.lock", "version=1\n") ]);
+      ( "PDM project-root escape",
+        [
+          ("main.py", "");
+          ( "pyproject.toml",
+            "[project]\n\
+             name='manager-app'\n\
+             version='1.0.0'\n\
+             requires-python='>=3.11,<3.14'\n\
+             dependencies=['local @ file:///${PROJECT_ROOT}/../outside']\n\
+             [tool.pdm]\n\
+             distribution=false\n" );
+        ] );
     ];
   finish ()

@@ -31,17 +31,15 @@ let write root path bytes =
       Out_channel.output_string channel bytes)
 
 let request root extras =
-  let defaults =
-    [
-      ("source", `String root);
-      ("platforms", `List [ `String "linux/amd64"; `String "linux/arm64" ]);
-    ]
-  in
-  Yojson.Basic.to_string
-    (`Assoc
-       (extras
-       @ List.filter (fun (key, _) -> not (List.mem_assoc key extras)) defaults
-       ))
+  Yojson.Basic.to_string (`Assoc (("source", `String root) :: extras))
+
+let prepare ?providers root fields =
+  Kiln_io.Driver.prepare ?providers (request root fields)
+
+let package prepared name =
+  Yojson.Basic.Util.(
+    `Assoc (Kiln_planning.Planner.info prepared)
+    |> member "resolvedPackages" |> member name)
 
 let failed = ref false
 

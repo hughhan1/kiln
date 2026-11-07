@@ -16,8 +16,17 @@ val write : string -> string -> string -> unit
 (** Write bytes to a path relative to a snapshot root. *)
 
 val request : string -> (string * Yojson.Basic.t) list -> string
-(** JSON request with a source root and both platforms; extra fields override
-    defaults. *)
+(** JSON request with a source root and extra fields. *)
+
+val prepare :
+  ?providers:Kiln_planning.Provider.t list ->
+  string ->
+  (string * Yojson.Basic.t) list ->
+  (Kiln_planning.Planner.prepared, Kiln_core.Error.t) result
+(** Prepare a snapshot root with extra request fields. *)
+
+val package : Kiln_planning.Planner.prepared -> string -> Yojson.Basic.t
+(** A resolved package's reported metadata. *)
 
 val test : string -> (unit -> unit) -> unit
 (** Run a named case and retain failures for [finish], allowing later cases to
