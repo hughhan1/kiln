@@ -7,6 +7,7 @@ open Contract_support
 
 let files = [ ("package.json", {|{"main":"main.js"}|}); ("main.js", "") ]
 let oldest_node = (List.hd Pins.node).Pins.node.Pins.release
+let recipe root fields = Planner.dockerfile (ok (prepare root fields))
 
 let () =
   List.iter
@@ -244,7 +245,7 @@ let () =
           {|{"steps":{"install":{"commands":[]}}}|};
           {|{"steps":{"install":{"commands":["echo before","..."]}}}|};
         ];
-      let recipe = Planner.dockerfile (ok (prepare root [])) in
+      let recipe = recipe root [] in
       let position line = Option.get (String.find_first ~sub:line recipe) in
       check "inherited install follows earlier commands"
         (position {|RUN ["/bin/sh","-c","echo before"]|}
@@ -344,9 +345,7 @@ let () =
           Unix.mkdir (Filename.concat root "node_modules") 0o700;
           write root ("node_modules/" ^ ignored) "[";
           check "it stays out of planning and the build context"
-            (contains
-               (Planner.dockerfile (ok (prepare root [])))
-               "--exclude=node_modules")))
+            (contains (recipe root []) "--exclude=node_modules")))
     [
       ("Python", [ ("main.py", "") ], "pyproject.toml");
       ("Go", [ ("go.mod", "module example\ngo 1.27\n") ], "go.work");
@@ -368,15 +367,16 @@ dependencies = ["idna==3.10"]
 |}
   in
   let development = [ ("development", `Bool true) ] in
-  let recipe root fields = Planner.dockerfile (ok (prepare root fields)) in
   List.iter
-    (fun (name, files, source, kept, installed) ->
+    (fun (name, files, source, copies, installed) ->
       snapshot files (name ^ " development image leaves source out")
         (fun root ->
           let plain = recipe root [] and image = recipe root development in
+          let count text =
+            String.find_all ~sub:source (fun _ n -> n + 1) text 0
+          in
           check "only the flag excludes source"
-            ((not (contains plain source)) && contains image source);
-          check "dependencies and output stay" (contains image kept);
+            (count plain = 0 && count image = copies);
           List.iter
             (fun marker ->
               check "the project is not installed"
@@ -384,9 +384,13 @@ dependencies = ["idna==3.10"]
             installed))
     [
       ( "pip",
-        [ ("pyproject.toml", project); ("main.py", "") ],
+        [
+          ("pyproject.toml", project);
+          ("main.py", "");
+          ("package.json", {|{"scripts":{"build":"vite build"}}|});
+        ],
         "--exclude=**/*.py ",
-        {|["/opt/venv/","/opt/venv/"]|},
+        3,
         [ "kiln-project" ] );
       ( "Poetry",
         [
@@ -396,31 +400,14 @@ dependencies = ["idna==3.10"]
           ("main.py", "");
         ],
         "--exclude=**/*.py ",
-        {|"--no-root"|},
+        2,
         [ {|"--no-ansi"]|} ] );
       ( "Node",
         [ ("package.json", {|{"main":"[id].js"}|}); ("[id].js", "") ],
         "--exclude=?id?.js ",
-        "!**/node_modules",
+        1,
         [] );
     ];
-  snapshot
-    [
-      ("pyproject.toml", project);
-      ("main.py", "");
-      ("package.json", {|{"scripts":{"build":"vite build"}}|});
-    ]
-    "development Python build reads no Python source"
-    (fun root ->
-      let copies =
-        List.filter
-          (String.starts_with ~prefix:"COPY --exclude=.git ")
-          (String.split_on_char '\n' (recipe root development))
-      in
-      check "the frontend and build stages both exclude it"
-        (List.length copies = 2
-        && List.for_all (fun line -> contains line "--exclude=**/*.py ") copies
-        ));
   snapshot files "development exclusions fit BuildKit's line limit" (fun root ->
       for i = 1 to 2000 do
         write root

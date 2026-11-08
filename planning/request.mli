@@ -30,10 +30,8 @@ type t = private {
   config_file : string;
   variables : Build_plan.environment option;
   development : bool;
-      (** Build an image that takes its server source from an overlay at boot:
-          Python leaves [*.py] and the project install out of the build and the
-          image, Node leaves the snapshot's files out of the image; both keep
-          dependencies and build output. Other providers ignore it. *)
+      (** Leave server source out of the image, keeping dependencies and build
+          output. *)
 }
 
 val decode : (string * Yojson.Basic.t) list -> (t, Kiln_core.Error.t) result

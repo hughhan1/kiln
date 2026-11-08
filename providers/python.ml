@@ -56,7 +56,6 @@ type install =
       manager : manager;
       version : Version.version;
       lock : bool;
-      install_root : bool;
     }
 
 and manager = Poetry | Pdm
@@ -268,15 +267,15 @@ let uv_declarations request source root =
   in
   Ok (declarations, parse)
 
-let install_inputs source install ~requirements ~project ~lock ~uv_local
-    ~static_dependencies =
+let install_inputs source install ~installable ~requirements ~project ~lock
+    ~uv_local ~static_dependencies =
   let present = List.filter (Source.has source) in
   let manifests local paths =
     if local || source.Source.links then Whole_source
     else Manifests (List.sort_uniq String.compare paths)
   in
   match install with
-  | Manager_install { install_root = true; _ } -> Whole_source
+  | Manager_install _ when installable -> Whole_source
   | Pip_install { project = true; _ } ->
       manifests
         (project || requirements.Python_sources.local || not static_dependencies)
@@ -289,7 +288,7 @@ let install_inputs source install ~requirements ~project ~lock ~uv_local
         (project || lock || uv_local)
         ("pyproject.toml" :: "uv.lock"
         :: present [ "uv.toml"; ".python-version" ])
-  | Manager_install { manager; install_root = false; _ } ->
+  | Manager_install { manager; _ } ->
       manifests (project || lock)
         ("pyproject.toml"
         :: present
@@ -393,10 +392,13 @@ let load request source =
         Some (manager, declarations, version)
   in
   let* dependencies = Toml.strings root [ "project"; "dependencies" ] in
-  let* install =
+  let* uv_package =
+    Toml.field root [ "tool"; "uv"; "package" ] (Otoml.get_boolean ~strict:true)
+  in
+  let* install, installable =
     match (selected_manager, lock) with
     | Some (manager, _, version), _ ->
-        let* install_root =
+        let+ install_root =
           match manager with
           | Poetry ->
               let+ package_mode =
@@ -413,22 +415,16 @@ let load request source =
               in
               Option.is_some name && Option.value ~default:true distribution
         in
-        Ok
-          (Manager_install
-             {
-               manager;
-               version;
-               lock = has_lock;
-               install_root = install_root && not request.Request.development;
-             })
+        (Manager_install { manager; version; lock = has_lock }, install_root)
     | None, None ->
         Ok
-          (Pip_install
-             {
-               requirements = Source.has source "requirements.txt";
-               project = installable;
-               dependencies;
-             })
+          ( Pip_install
+              {
+                requirements = Source.has source "requirements.txt";
+                project = installable;
+                dependencies;
+              },
+            installable )
     | None, Some _ ->
         if not (Source.has source "pyproject.toml") then
           Json.metadata "uv.lock" "requires pyproject.toml"
@@ -443,20 +439,10 @@ let load request source =
               Pins.uv
           in
           let+ image = Build_plan.image pin.Pins.image in
-          Uv_install { version; image }
+          ( Uv_install { version; image },
+            Option.value ~default:(Option.is_some build_system) uv_package )
   in
-  let* uv_package =
-    Toml.field root [ "tool"; "uv"; "package" ] (Otoml.get_boolean ~strict:true)
-  in
-  let installable =
-    (not request.Request.development)
-    &&
-    match install with
-    | Pip_install _ -> installable
-    | Uv_install _ ->
-        Option.value ~default:(Option.is_some build_system) uv_package
-    | Manager_install { install_root; _ } -> install_root
-  in
+  let installable = installable && not request.Request.development in
   let* workspace =
     Toml.field root [ "tool"; "uv"; "workspace" ] Otoml.get_value
   in
@@ -466,7 +452,7 @@ let load request source =
   let inputs =
     if Request.replaces_install request then Whole_source
     else
-      install_inputs source install ~requirements:pip_requirements
+      install_inputs source install ~installable ~requirements:pip_requirements
         ~project:root_local
         ~lock:(uv_lock_local || manager_lock_local)
         ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
@@ -683,16 +669,16 @@ let plan app resolved =
           ( [ copy uv_stage [ "/uv" ] "/usr/local/bin/uv"; Env env ],
             defaults,
             [] )
-    | Manager_install { manager = Poetry; version; lock; install_root } ->
+    | Manager_install { manager = Poetry; version; lock } ->
         manager_setup app resolved Poetry version
           (if lock then [ [ "check"; "--lock" ] ] else [])
           ([ "install"; "--only"; "main"; "--no-interaction"; "--no-ansi" ]
-          @ if install_root then [] else [ "--no-root" ])
-    | Manager_install { manager = Pdm; version; lock; install_root } ->
+          @ if app.installable then [] else [ "--no-root" ])
+    | Manager_install { manager = Pdm; version; lock } ->
         manager_setup app resolved Pdm version []
           ([ "install"; "--prod"; "--no-editable" ]
           @ (if lock then [ "--check" ] else [])
-          @ if install_root then [] else [ "--no-self" ])
+          @ if app.installable then [] else [ "--no-self" ])
   in
   let* venv = run [ "python"; "-m"; "venv"; "/opt/venv" ] in
   let* commands =

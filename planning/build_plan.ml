@@ -237,7 +237,6 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
         ^ String.concat ""
             (List.mapi
                (fun i p ->
-                 (* BuildKit caps a physical line at 64 KiB. *)
                  (if i > 0 && i mod 64 = 0 then "\\\n  " else "")
                  ^ "--exclude=" ^ p ^ " ")
                exclude)

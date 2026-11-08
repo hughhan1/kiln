@@ -166,8 +166,6 @@ let install_inputs (snapshot : snapshot) =
              ])
          snapshot.files)
 
-(* A COPY exclusion is a pattern on one Dockerfile word: [?] stands in for any
-   character that could mean something else there. *)
 let exclusion_character = function
   | ( 'a' .. 'z'
     | 'A' .. 'Z'
