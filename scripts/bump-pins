@@ -25,7 +25,7 @@ registry() {
 # without both platforms returns 2, and its release is left out.
 image() {
   registry "$1" "manifests/$2" > "$stage/index" || die "cannot fetch $1:$2"
-  if ! jq -e '[.manifests[].platform | .os + "/" + .architecture] | contains(["linux/amd64", "linux/arm64"])' \
+  if ! jq -e '[.manifests[]?.platform | .os + "/" + .architecture] | contains(["linux/amd64", "linux/arm64"])' \
     "$stage/index" > /dev/null; then
     echo "bump-pins: skipping $1:$2, which lacks linux/amd64 or linux/arm64" >&2
     return 2
