@@ -29,6 +29,9 @@ type t = private {
   build : Commands.t option;
   config_file : string;
   variables : Build_plan.environment option;
+  development : bool;
+      (** Leave server source out of the image, keeping dependencies and build
+          output. *)
 }
 
 val decode : (string * Yojson.Basic.t) list -> (t, Kiln_core.Error.t) result

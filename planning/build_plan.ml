@@ -234,7 +234,12 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
             owner
         in
         "COPY " ^ prefix ^ owner
-        ^ String.concat "" (List.map (fun p -> "--exclude=" ^ p ^ " ") exclude)
+        ^ String.concat ""
+            (List.mapi
+               (fun i p ->
+                 (if i > 0 && i mod 64 = 0 then "\\\n  " else "")
+                 ^ "--exclude=" ^ p ^ " ")
+               exclude)
         ^ json (paths @ [ destination ])
     | Workdir path -> "WORKDIR " ^ Json.encode (`String path)
     | Env pairs ->

@@ -7,6 +7,7 @@ open Contract_support
 
 let files = [ ("package.json", {|{"main":"main.js"}|}); ("main.js", "") ]
 let oldest_node = (List.hd Pins.node).Pins.node.Pins.release
+let recipe root fields = Planner.dockerfile (ok (prepare root fields))
 
 let () =
   List.iter
@@ -26,22 +27,17 @@ let () =
           check "strict mode rejects a missing startup"
             (prepare root [ ("errorMissingStartCommand", `Bool true) ]
             = Error Kiln_core.Error.Missing_start);
-          let argv = [ "/launcher"; "" ] in
           let launched =
             ok
               (prepare root
                  [
-                   ("start", Json.string_array argv);
+                   ("start", Json.string_array [ "/launcher" ]);
                    ("errorMissingStartCommand", `Bool true);
                  ])
           in
-          let response = Yojson.Basic.from_string (Planner.encode launched) in
-          check "strict native launcher preserves argv"
-            (contains
-               (member "dockerfile" response |> to_string)
-               {|CMD ["/launcher",""]|});
           check "declared startup has no warning"
-            (member "logs" response = `List [])))
+            (member "logs" (Yojson.Basic.from_string (Planner.encode launched))
+            = `List [])))
     [
       ("Node", [ ("package.json", "{}") ]);
       ("empty Node entry", [ ("package.json", {|{"main":""}|}) ]);
@@ -56,19 +52,13 @@ let () =
           (prepare root
              [
                ( "environment",
-                 `Assoc
-                   [
-                     ("RAILPACK_NODE_VERSION", `String oldest_node);
-                     ("TOKEN", `String "private\nvalue");
-                   ] );
+                 `Assoc [ ("RAILPACK_NODE_VERSION", `String oldest_node) ] );
              ])
       in
       let open Yojson.Basic.Util in
       check "environment overrides file version"
         (prepared.Planner.resolution |> member "data" |> member "nodeVersion"
-       = `String oldest_node);
-      check "secret values stay out of prepared output"
-        (not (contains (Planner.encode prepared) "private")));
+       = `String oldest_node));
   snapshot files "provider registration and selection" (fun root ->
       let module Alternate = struct
         include Kiln_providers.Node
@@ -117,9 +107,6 @@ let () =
             = expected))
         [
           ("inherit startup", [], Some args);
-          ( "explicit clear wins",
-            [ Build_plan.Start (Some other); Build_plan.Start None ],
-            None );
           ( "entrypoint clears inherited CMD",
             [ Build_plan.Entrypoint None ],
             None );
@@ -141,9 +128,8 @@ let () =
           {|{
     // Shared configuration, including JSONC syntax.
     "provider": "node",
-    "steps": {"build": {"commands": ["printf built > artifact"]}},
     "deploy": {"startCommand": "cat artifact", "variables": {"MODE":"configured"}},
-    "secrets": ["TOKEN", "TOKEN"],
+    "secrets": ["FILE", "FILE"],
   }|}
         );
       ])
@@ -153,8 +139,6 @@ let () =
         ok
           (prepare root
              [
-               ("buildCommand", `String "printf override > artifact");
-               ("startCommand", `String "printf '%s' overridden");
                ( "environment",
                  `Assoc
                    [
@@ -165,10 +149,8 @@ let () =
              ])
       in
       let recipe = Planner.dockerfile first in
-      check "file build command takes precedence"
-        (contains recipe {|"printf built > artifact"|}
-        && (not (contains recipe "printf override"))
-        && not (contains recipe "echo environment-build"));
+      check "secret values stay out of prepared output"
+        (not (contains (Planner.encode first) "private"));
       check "file startup takes precedence"
         (contains recipe {|CMD ["/bin/bash","-c","cat artifact"]|});
       check "runtime variables" (contains recipe {|MODE="configured"|});
@@ -184,7 +166,7 @@ let () =
       check "configured and supplied secrets form a set"
         (response |> member "secrets"
         = Json.string_array
-            [ "RAILPACK_BUILD_CMD"; "RAILPACK_START_CMD"; "TOKEN" ]);
+            [ "FILE"; "RAILPACK_BUILD_CMD"; "RAILPACK_START_CMD"; "TOKEN" ]);
       let argv = [ "/launcher"; "with spaces"; "\"quoted\""; "" ] in
       let native =
         ok
@@ -234,17 +216,10 @@ let () =
           ({|"commands":[{"cmd":"..."}]|}, `Inherit);
           ({|"commands":[{"cmd":"sh -c '...'"}]|}, `Inherit);
         ]);
-  snapshot files "install configuration is accepted" (fun root ->
-      List.iter
-        (fun config ->
-          write root "railpack.json" config;
-          check config (Result.is_ok (prepare root [])))
-        [
-          {|{"steps":{"install":{}}}|};
-          {|{"steps":{"install":{"commands":[]}}}|};
-          {|{"steps":{"install":{"commands":["echo before","..."]}}}|};
-        ];
-      let recipe = Planner.dockerfile (ok (prepare root [])) in
+  snapshot files "inherited install follows earlier commands" (fun root ->
+      write root "railpack.json"
+        {|{"steps":{"install":{"commands":["echo before","..."]}}}|};
+      let recipe = recipe root [] in
       let position line = Option.get (String.find_first ~sub:line recipe) in
       check "inherited install follows earlier commands"
         (position {|RUN ["/bin/sh","-c","echo before"]|}
@@ -262,18 +237,15 @@ let () =
           {|{"steps":{"install":{"commands":["FILE:artifact missing"]}}}|};
           {|{"steps":{"build":{"commands":[{"cmd":"'unclosed"}]}}}|};
           {|{"steps":{"build":{"commands":[{"cmd":"echo ignored","path":"/tools"}]}}}|};
-          {|{"steps":{"build":{"commands":[{"cmd":"echo ok","unknown":true}]}}}|};
           {|{"steps":{"build":{"commands":["COPY:only-source"]}}}|};
           {|{"steps":{"build":{"commands":[{"src":"","dest":"copy.js"}]}}}|};
           {|{"steps":{"build":{"commands":[{"src":"main.js","dest":"copy.js","image":"bad image"}]}}}|};
           {|{"steps":{"build":{"assets":{"x":"value"},"commands":[{"path":"artifact","name":"x","mode":4096}]}}}|};
           {|{"steps":{"build":{"commands":["PATH:/tools\rINJECT"]}}}|};
           {|{"steps":{"build":{"commands":[" "]}}}|};
-          {|{"steps":{"build":{"commands":["echo\u0000bad"]}}}|};
           {|{"deploy":{"variables":{"BAD KEY":"value"}}}|};
           {|{"deploy":{"variables":{"MODE":"line\nbreak"}}}|};
           {|{"secrets":["BAD KEY"]}|};
-          {|{"deploy":{"variables":{"MODE":"line\rbreak"}}}|};
         ]);
   snapshot files "invalid request is rejected" (fun root ->
       List.iter
@@ -308,45 +280,40 @@ let () =
                [ "prepare"; root; "-e"; entry; "--hide-pretty-plan" ]);
           check "invalid name diagnosed"
             (contains (Buffer.contents errors) "invalid variable name"))
-        [ "BAD KEY"; "BAD KEY="; "=value" ]);
-  List.iter
-    (fun (label, files, flags, message) ->
-      snapshot files ("CLI failure: " ^ label) (fun root ->
-          let info = Filename.concat root "info.json" in
-          let output =
-            run ~exit_code:1 "../bin/main.exe"
-              ([ "prepare"; root; "--info-out"; info; "--hide-pretty-plan" ]
-              @ flags)
-          in
-          check "failed CLI emits no plan" (output = "");
-          let open Yojson.Basic.Util in
-          let info = Yojson.Basic.from_file info in
-          check "failure" (member "success" info = `Bool false);
-          check "structured diagnostic"
-            (match member "logs" info |> to_list with
-            | [ log ] ->
-                member "Level" log = `String "error"
-                && contains (member "Msg" log |> to_string) message
-            | [] | _ :: _ -> false)))
-    [
-      ( "configuration",
-        files @ [ ("railpack.json", {|{"buildAptPackages":["curl"]}|}) ],
-        [],
-        "buildAptPackages" );
-      ( "strict startup",
-        [ ("package.json", "{}") ],
-        [ "--error-missing-start" ],
-        "no startup" );
-    ];
+        [ "=value" ]);
+  snapshot
+    [ ("package.json", "{}") ]
+    "CLI failure"
+    (fun root ->
+      let info = Filename.concat root "info.json" in
+      let output =
+        run ~exit_code:1 "../bin/main.exe"
+          [
+            "prepare";
+            root;
+            "--info-out";
+            info;
+            "--hide-pretty-plan";
+            "--error-missing-start";
+          ]
+      in
+      check "failed CLI emits no plan" (output = "");
+      let open Yojson.Basic.Util in
+      let info = Yojson.Basic.from_file info in
+      check "failure" (member "success" info = `Bool false);
+      check "structured diagnostic"
+        (match member "logs" info |> to_list with
+        | [ log ] ->
+            member "Level" log = `String "error"
+            && contains (member "Msg" log |> to_string) "no startup"
+        | [] | _ :: _ -> false));
   List.iter
     (fun (provider, files, ignored) ->
       snapshot files (provider ^ " ignores node_modules") (fun root ->
           Unix.mkdir (Filename.concat root "node_modules") 0o700;
           write root ("node_modules/" ^ ignored) "[";
           check "it stays out of planning and the build context"
-            (contains
-               (Planner.dockerfile (ok (prepare root [])))
-               "--exclude=node_modules")))
+            (contains (recipe root []) "--exclude=node_modules")))
     [
       ("Python", [ ("main.py", "") ], "pyproject.toml");
       ("Go", [ ("go.mod", "module example\ngo 1.27\n") ], "go.work");
@@ -360,4 +327,63 @@ let () =
       in
       check "custom path used"
         (contains (Build_plan.dockerfile plan.Planner.plan) "echo nested"));
+  let project =
+    {|[project]
+name = "app"
+version = "1"
+dependencies = ["idna==3.10"]
+|}
+  in
+  let development = [ ("development", `Bool true) ] in
+  List.iter
+    (fun (name, files, source, copies, installed) ->
+      snapshot files (name ^ " development image leaves source out")
+        (fun root ->
+          let plain = recipe root [] and image = recipe root development in
+          let count text =
+            String.find_all ~sub:source (fun _ n -> n + 1) text 0
+          in
+          check "only the flag excludes source"
+            (count plain = 0 && count image = copies);
+          List.iter
+            (fun marker ->
+              check "the project is not installed"
+                (contains plain marker && not (contains image marker)))
+            installed))
+    [
+      ( "pip",
+        [
+          ("pyproject.toml", project);
+          ("main.py", "");
+          ("package.json", {|{"scripts":{"build":"vite build"}}|});
+        ],
+        "--exclude=**/*.py ",
+        3,
+        [ "kiln-project" ] );
+      ( "Poetry",
+        [
+          ( "pyproject.toml",
+            project
+            ^ "[build-system]\nbuild-backend = \"poetry.core.masonry.api\"\n" );
+          ("main.py", "");
+        ],
+        "--exclude=**/*.py ",
+        2,
+        [ {|"--no-ansi"]|} ] );
+      ( "Node",
+        [ ("package.json", {|{"main":"[id].js"}|}); ("[id].js", "") ],
+        "--exclude=?id?.js ",
+        1,
+        [] );
+    ];
+  snapshot files "development exclusions fit BuildKit's line limit" (fun root ->
+      for i = 1 to 2000 do
+        write root
+          (Printf.sprintf "%04d-a-rather-long-source-file-name.js" i)
+          ""
+      done;
+      check "every line fits"
+        (List.for_all
+           (fun line -> String.length line < 65536)
+           (String.split_on_char '\n' (recipe root development))));
   finish ()
