@@ -145,7 +145,7 @@ let manager_selection source root =
 let manager_declarations request manager =
   let name = manager_name manager in
   let declarations = Request.defaults request name [] in
-  let fallback = match manager with Poetry -> "2.5.1" | Pdm -> "2.29.5" in
+  let fallback = match manager with Poetry -> "2.5.1" | Pdm -> "2.29.7" in
   let* version =
     match Package.versions declarations with
     | [] -> Version.version fallback
@@ -558,7 +558,8 @@ let manager_setup app resolved manager version checks install =
             "/opt/kiln-tools/bin/pip";
             "install";
             "--no-cache-dir";
-            name ^ "==" ^ Version.show version;
+            (match name with "pdm" -> "pdm[locked]" | _ -> name)
+            ^ "==" ^ Version.show version;
           ]
       in
       let* tools = stage (Image resolved.builder) [ venv; pip ] in
