@@ -110,11 +110,8 @@ let decode fields =
   }
 
 let build_command request default =
-  let inherited =
-    List.map (fun argv -> Build_plan.Run argv) (Option.to_list default)
-  in
-  Option.fold ~none:inherited
-    ~some:(fun commands -> Commands.expand commands inherited)
+  Option.fold ~none:default
+    ~some:(fun commands -> Commands.expand commands default)
     request.build
 
 let install_commands request block =

@@ -203,6 +203,38 @@ let () =
         (contains dockerfile {|COPY ["requirements.txt","./"]|}
         && contains dockerfile
              {|COPY ["requirements/base.txt","requirements/"]|}));
+  let frontend package test checks =
+    snapshot
+      [
+        ("requirements.txt", "idna==3.10\n");
+        ("main.py", "");
+        ("package.json", package);
+      ]
+      test
+      (fun root -> checks (Planner.dockerfile (ok (prepare root []))))
+  in
+  frontend {|{"scripts":{"build":"vite build"}}|}
+    "a package.json build runs on the build platform" (fun dockerfile ->
+      check "the build follows the dependency check for the build platform"
+        (ordered
+           (String.split_on_char '\n' dockerfile)
+           [
+             "FROM --platform=$BUILDPLATFORM docker.io/library/node";
+             "RUN [\"/bin/sh\",\"-c\",\"cpu=$(node -p process.arch)";
+             {|RUN ["/bin/sh","-c","[ -e .kiln-emulate ] || exec \"$@\"","kiln","npm","run","build"]|};
+           ]);
+      check "the target installs and builds when the check fails"
+        (ordered
+           (String.split_on_char '\n' dockerfile)
+           [
+             {|RUN ["/bin/sh","-c","[ ! -e .kiln-emulate ] || exec \"$@\"","kiln","npm","install"]|};
+             {|RUN ["/bin/sh","-c","[ ! -e .kiln-emulate ] || exec \"$@\"","kiln","npm","run","build"]|};
+           ]);
+      check "node_modules and the marker stay out of the image"
+        (contains dockerfile "--exclude=**/node_modules --exclude=.kiln-emulate"));
+  frontend {|{"devDependencies":{"prettier":"3.0.0"}}|}
+    "a package.json without a build script builds nothing" (fun dockerfile ->
+      check "no Node stage" (not (contains dockerfile "npm")));
   let pyproject dependency =
     "[project]\nname='app'\ndynamic=['version']\ndependencies=['" ^ dependency
     ^ "']\n\

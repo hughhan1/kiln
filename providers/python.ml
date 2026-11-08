@@ -478,6 +478,7 @@ let load request source =
         (Whole_source | Manifests _) ) ->
         None
   in
+  let* frontend = Node.frontend ~exclude source in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
   in
@@ -507,7 +508,7 @@ let load request source =
       start;
       install_override = request.Request.install;
       install_commands = Request.install_commands request;
-      build = Request.build_command request None;
+      build = Request.build_command request frontend;
     }
 
 let resolve app =

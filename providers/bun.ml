@@ -80,7 +80,9 @@ let load request source =
     install_commands = Request.install_commands request;
     build =
       Request.build_command request
-        (if Javascript.has_script root "build" then Some build_argv else None);
+        (if Javascript.has_script root "build" then
+           [ Build_plan.Run build_argv ]
+         else []);
     start;
   }
 

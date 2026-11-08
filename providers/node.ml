@@ -225,7 +225,8 @@ let interpret (request : Request.t) (snapshot : snapshot) =
     inputs;
     build =
       Request.build_command request
-        (if Javascript.has_script pkg "build" then Some build_argv else None);
+        (if Javascript.has_script pkg "build" then [ Build_plan.Run build_argv ]
+         else []);
     command;
   }
 
@@ -334,71 +335,84 @@ let native app r =
   | Manifests _, Pnpm | Whole_source, _ -> false
 
 (* An install script may compile for the platform it runs on, so a package set
-   with one installs under emulation. *)
-let native_npm =
-  {|case "$TARGETARCH" in amd64) cpu=x64 ;; arm64) cpu=arm64 ;; esac
+   with one installs under emulation. [cpu] sets $cpu to the platform's npm name. *)
+let native_npm cpu =
+  cpu
+  ^ {|
 if npm install --os=linux --cpu="$cpu" --libc=glibc --ignore-scripts \
   && ! grep -qs '"hasInstallScript": true' node_modules/.package-lock.json; then
-  echo "kiln: installed Node dependencies natively for $TARGETARCH"
+  echo "kiln: installed Node dependencies natively for $cpu"
 else
-  echo "kiln: no native Node install for $TARGETARCH; installing under emulation"
+  echo "kiln: no native Node install for $cpu; installing under emulation"
   rm -rf node_modules
   touch .kiln-emulate
 fi|}
 
+let manager_env r =
+  let open Build_plan in
+  match r.pm with
+  | Npm -> Ok []
+  | Pnpm ->
+      let+ env =
+        environment
+          [
+            ("npm_config_manage_package_manager_versions", "false");
+            ("npm_config_package_manager_strict_version", "false");
+            ("npm_config_pm_on_fail", "ignore");
+          ]
+      in
+      [ Env env ]
+
+let toolchain r from =
+  let open Build_plan in
+  let* manager_env = manager_env r in
+  let* ci_env = environment [ ("CI", "true") ] in
+  stage from
+    ([ Workdir "/app"; Env ci_env ]
+    @ manager_env
+    @ List.map (fun command -> Run command) (Option.to_list r.manager_install))
+
+(* Run each command unless the shell [test] succeeds. *)
+let unless test =
+  let open Build_plan in
+  Support.traverse (function
+    | Run command ->
+        let+ command =
+          argv
+            ([ "/bin/sh"; "-c"; test ^ {| || exec "$@"|}; "kiln" ]
+            @ arguments command)
+        in
+        Run command
+    | ( Copy _ | Workdir _ | Env _ | User _ | Entrypoint _ | Start _
+      | Prepend_path _ | Write _ ) as operation ->
+        Ok operation)
+
 let plan app r =
   let open Build_plan in
   let pm = name r.pm in
-  let* manager_env =
-    match r.pm with
-    | Npm -> Ok []
-    | Pnpm ->
-        let+ env =
-          environment
-            [
-              ("npm_config_manage_package_manager_versions", "false");
-              ("npm_config_package_manager_strict_version", "false");
-              ("npm_config_pm_on_fail", "ignore");
-            ]
-        in
-        [ Env env ]
-  in
-  let* ci_env = environment [ ("CI", "true") ] in
+  let* manager_env = manager_env r in
   let* runtime_env =
     environment
       [ ("NODE_ENV", "production"); ("HOME", "/tmp"); ("PORT", "8080") ]
   in
-  let toolchain base =
-    stage base
-      ([ Workdir "/app"; Env ci_env ]
-      @ manager_env
-      @ List.map (fun command -> Run command) (Option.to_list r.manager_install)
-      )
-  in
-  let* builder = toolchain (Image r.builder) in
+  let* builder = toolchain r (Image r.builder) in
   let copy_source = Source.copy ~exclude [ "." ] "." in
   let install = Run app.install in
   let* steps =
     match app.inputs with
     | Whole_source -> Ok (copy_source :: app.install_commands [ install ])
     | Manifests paths when native app r ->
-        let* base = toolchain (Native r.builder) in
-        let* native_install = argv [ "/bin/sh"; "-c"; native_npm ] in
+        let* base = toolchain r (Native r.builder) in
+        let* native_install =
+          shell
+            (native_npm
+               {|case "$TARGETARCH" in amd64) cpu=x64 ;; arm64) cpu=arm64 ;; esac|})
+        in
         let* installed =
           stage (Stage base) (Source.manifests paths @ [ Run native_install ])
         in
-        let+ emulated =
-          argv
-            ([
-               "/bin/sh";
-               "-c";
-               {|[ ! -e .kiln-emulate ] || { rm .kiln-emulate && "$@"; }|};
-               "kiln";
-             ]
-            @ arguments app.install)
-        in
-        app.install_commands
-          [ copy installed [ "/app/" ] "/app/"; Run emulated ]
+        let+ emulated = unless "[ ! -e .kiln-emulate ]" [ install ] in
+        app.install_commands (copy installed [ "/app/" ] "/app/" :: emulated)
         @ [ copy_source ]
     | Manifests paths ->
         Ok
@@ -422,8 +436,9 @@ let plan app r =
         copy ~owner:(10001, 10001)
           ~exclude:[ "*"; "!**/node_modules" ]
           build [ "/app/" ] "/app/";
-        copy ~owner:(10001, 10001) ~exclude:[ "**/node_modules" ] build
-          [ "/app/" ] "/app/";
+        copy ~owner:(10001, 10001)
+          ~exclude:[ "**/node_modules"; ".kiln-emulate" ]
+          build [ "/app/" ] "/app/";
         User (10001, 10001);
         Start app.command;
       ])
@@ -484,3 +499,38 @@ let metadata app r =
     ("nodeRuntime", "node");
     ("nodePackageManager", name app.manager);
   ]
+
+let frontend ~exclude source =
+  if not (Source.has source "package.json") then Ok []
+  else
+    let* request = Request.decode [ ("source", `String "") ] in
+    let* app = load request source in
+    match app.build with
+    | [] -> Ok []
+    | _ :: _ ->
+        let open Build_plan in
+        let* r = resolve app in
+        let commands = Run app.install :: app.build in
+        let copy_source = Source.copy ~exclude [ "." ] "." in
+        let* steps =
+          match app.inputs with
+          | Manifests paths when native app r ->
+              let* base = toolchain r (Native r.builder) in
+              let* check = shell (native_npm "cpu=$(node -p process.arch)") in
+              let* build = unless "[ -e .kiln-emulate ]" app.build in
+              let* built =
+                stage (Stage base)
+                  (Source.manifests paths @ (Run check :: copy_source :: build))
+              in
+              let+ fallback = unless "[ ! -e .kiln-emulate ]" commands in
+              copy ~exclude:[ "**/node_modules" ] built [ "/app/" ] "/app/"
+              :: fallback
+          | Manifests _ | Whole_source -> Ok (copy_source :: commands)
+        in
+        let* target = toolchain r (Image r.builder) in
+        let+ output = stage (Stage target) steps in
+        [
+          copy
+            ~exclude:[ "**/node_modules"; ".kiln-emulate" ]
+            output [ "/app/" ] "/app/";
+        ]
