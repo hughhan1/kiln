@@ -107,6 +107,7 @@ type application = {
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   inputs : inputs;
   build : Build_plan.operation list;
+  overlaid : string list;
   command : Build_plan.argv option;
 }
 
@@ -164,6 +165,17 @@ let install_inputs (snapshot : snapshot) =
                "pnpm-workspace.yaml";
              ])
          snapshot.files)
+
+(* A COPY exclusion is a pattern on one Dockerfile word: [?] stands in for any
+   character that could mean something else there. *)
+let exclusion_character = function
+  | ( 'a' .. 'z'
+    | 'A' .. 'Z'
+    | '0' .. '9'
+    | '/' | '.' | '_' | '-'
+    | '\128' .. '\255' ) as c ->
+      c
+  | _ -> '?'
 
 let interpret (request : Request.t) (snapshot : snapshot) =
   let packages = snapshot.packages in
@@ -227,6 +239,10 @@ let interpret (request : Request.t) (snapshot : snapshot) =
       Request.build_command request
         (if Javascript.has_script pkg "build" then [ Build_plan.Run build_argv ]
          else []);
+    overlaid =
+      (if request.Request.development then
+         List.map (String.map exclusion_character) snapshot.files
+       else []);
     command;
   }
 
@@ -437,7 +453,7 @@ let plan app r =
           ~exclude:[ "*"; "!**/node_modules" ]
           build [ "/app/" ] "/app/";
         copy ~owner:(10001, 10001)
-          ~exclude:[ "**/node_modules"; ".kiln-emulate" ]
+          ~exclude:("**/node_modules" :: ".kiln-emulate" :: app.overlaid)
           build [ "/app/" ] "/app/";
         User (10001, 10001);
         Start app.command;

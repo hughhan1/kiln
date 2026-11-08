@@ -28,6 +28,9 @@ val workspace : string list -> (unit, Kiln_core.Error.t) result
 (** Reject absolute workspace patterns and parent-directory components,
     including negated patterns. *)
 
+val everywhere : string list -> string list
+(** COPY exclusions matching each name at every depth. *)
+
 val copy : exclude:string list -> string list -> string -> Build_plan.operation
 (** Copy snapshot paths while excluding .git and provider exclusions at every
     depth. *)

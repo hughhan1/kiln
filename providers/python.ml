@@ -76,6 +76,7 @@ type application = {
   installable : bool;
   start : Build_plan.argv option;
   build : Build_plan.operation list;
+  server : string list;
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   install_override : Build_plan.argv option;
 }
@@ -412,7 +413,14 @@ let load request source =
               in
               Option.is_some name && Option.value ~default:true distribution
         in
-        Ok (Manager_install { manager; version; lock = has_lock; install_root })
+        Ok
+          (Manager_install
+             {
+               manager;
+               version;
+               lock = has_lock;
+               install_root = install_root && not request.Request.development;
+             })
     | None, None ->
         Ok
           (Pip_install
@@ -441,6 +449,8 @@ let load request source =
     Toml.field root [ "tool"; "uv"; "package" ] (Otoml.get_boolean ~strict:true)
   in
   let installable =
+    (not request.Request.development)
+    &&
     match install with
     | Pip_install _ -> installable
     | Uv_install _ ->
@@ -478,7 +488,8 @@ let load request source =
         (Whole_source | Manifests _) ) ->
         None
   in
-  let* frontend = Node.frontend ~exclude source in
+  let server = if request.Request.development then [ "*.py" ] else [] in
+  let* frontend = Node.frontend ~exclude:(server @ exclude) source in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
   in
@@ -509,6 +520,7 @@ let load request source =
       install_override = request.Request.install;
       install_commands = Request.install_commands request;
       build = Request.build_command request frontend;
+      server;
     }
 
 let resolve app =
@@ -702,7 +714,7 @@ let plan app resolved =
     | Uv_install _, Manifests _ when app.installable ->
         let+ sync = run (uv_sync [ "--no-editable" ]) in
         [ sync ]
-    | Pip_install { project = true; _ }, Manifests _ ->
+    | Pip_install _, Manifests _ when app.installable ->
         let+ install = shell (pip_project ^ " && " ^ overlay_project) in
         [ Run install ]
     | ( (Pip_install _ | Uv_install _ | Manager_install _),
@@ -815,7 +827,9 @@ let plan app resolved =
           stage (Image resolved.builder) ([ Workdir "/app"; Env env ] @ install)
         in
         let+ build =
-          stage (Stage dependencies) ((copy_source :: finish) @ app.build)
+          stage (Stage dependencies)
+            (Source.copy ~exclude:(app.server @ exclude) [ "." ] "/app/"
+            :: (finish @ app.build))
         in
         (dependencies, build, finish)
   in
@@ -855,7 +869,9 @@ let plan app resolved =
      ]
     @ project
     @ [
-        copy ~owner:(1000, 1000) build [ "/app/" ] "/app/";
+        copy ~owner:(1000, 1000)
+          ~exclude:(Source.everywhere app.server)
+          build [ "/app/" ] "/app/";
         User (1000, 1000);
         Entrypoint None;
         Start app.start;

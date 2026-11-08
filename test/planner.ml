@@ -360,4 +360,75 @@ let () =
       in
       check "custom path used"
         (contains (Build_plan.dockerfile plan.Planner.plan) "echo nested"));
+  let project =
+    {|[project]
+name = "app"
+version = "1"
+dependencies = ["idna==3.10"]
+|}
+  in
+  let development = [ ("development", `Bool true) ] in
+  let recipe root fields = Planner.dockerfile (ok (prepare root fields)) in
+  List.iter
+    (fun (name, files, source, kept, installed) ->
+      snapshot files (name ^ " development image leaves source out")
+        (fun root ->
+          let plain = recipe root [] and image = recipe root development in
+          check "only the flag excludes source"
+            ((not (contains plain source)) && contains image source);
+          check "dependencies and output stay" (contains image kept);
+          List.iter
+            (fun marker ->
+              check "the project is not installed"
+                (contains plain marker && not (contains image marker)))
+            installed))
+    [
+      ( "pip",
+        [ ("pyproject.toml", project); ("main.py", "") ],
+        "--exclude=**/*.py ",
+        {|["/opt/venv/","/opt/venv/"]|},
+        [ "kiln-project" ] );
+      ( "Poetry",
+        [
+          ( "pyproject.toml",
+            project
+            ^ "[build-system]\nbuild-backend = \"poetry.core.masonry.api\"\n" );
+          ("main.py", "");
+        ],
+        "--exclude=**/*.py ",
+        {|"--no-root"|},
+        [ {|"--no-ansi"]|} ] );
+      ( "Node",
+        [ ("package.json", {|{"main":"[id].js"}|}); ("[id].js", "") ],
+        "--exclude=?id?.js ",
+        "!**/node_modules",
+        [] );
+    ];
+  snapshot
+    [
+      ("pyproject.toml", project);
+      ("main.py", "");
+      ("package.json", {|{"scripts":{"build":"vite build"}}|});
+    ]
+    "development Python build reads no Python source"
+    (fun root ->
+      let copies =
+        List.filter
+          (String.starts_with ~prefix:"COPY --exclude=.git ")
+          (String.split_on_char '\n' (recipe root development))
+      in
+      check "the frontend and build stages both exclude it"
+        (List.length copies = 2
+        && List.for_all (fun line -> contains line "--exclude=**/*.py ") copies
+        ));
+  snapshot files "development exclusions fit BuildKit's line limit" (fun root ->
+      for i = 1 to 2000 do
+        write root
+          (Printf.sprintf "%04d-a-rather-long-source-file-name.js" i)
+          ""
+      done;
+      check "every line fits"
+        (List.for_all
+           (fun line -> String.length line < 65536)
+           (String.split_on_char '\n' (recipe root development))));
   finish ()
