@@ -108,7 +108,7 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
       minimum;
       install;
       install_commands = Request.install_commands request;
-      build = Request.build_command request (Some build);
+      build = Request.build_command request [ Build_plan.Run build ];
       start;
     }
 

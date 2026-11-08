@@ -38,7 +38,7 @@ val decode : (string * Yojson.Basic.t) list -> (t, Kiln_core.Error.t) result
 val start : t -> Build_plan.argv option
 (** Extract the selected startup argv, regardless of how it was specified. *)
 
-val build_command : t -> Build_plan.argv option -> Build_plan.operation list
+val build_command : t -> Build_plan.operation list -> Build_plan.operation list
 (** Expand configured operations and inheritance against a provider default. *)
 
 val configure : t -> Source.t -> (t, Kiln_core.Error.t) result

@@ -177,8 +177,9 @@ let load request source =
     install_commands = Request.install_commands request;
     build =
       Request.build_command request
-        (if List.assoc_opt "build" tasks = Some true then Some build_argv
-         else None);
+        (if List.assoc_opt "build" tasks = Some true then
+           [ Build_plan.Run build_argv ]
+         else []);
     start;
   }
 
