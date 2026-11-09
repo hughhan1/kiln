@@ -54,18 +54,6 @@ let venv_follows_source prepared =
           false)
     (Build_plan.operations prepared.Planner.plan)
 
-(* Whether the first step starting with each prefix occurs in list order. *)
-let ordered steps prefixes =
-  let indices =
-    List.map
-      (fun prefix ->
-        match List.find_index (String.starts_with ~prefix) steps with
-        | Some index -> index
-        | None -> failwith ("missing step: " ^ prefix))
-      prefixes
-  in
-  indices = List.sort_uniq Int.compare indices
-
 let () =
   List.iter
     (fun (constraint_, included, excluded) ->

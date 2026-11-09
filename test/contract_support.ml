@@ -8,6 +8,17 @@ let ok = function
 
 let contains text pattern = Option.is_some (String.find_first ~sub:pattern text)
 
+let ordered steps prefixes =
+  let indices =
+    List.map
+      (fun prefix ->
+        match List.find_index (String.starts_with ~prefix) steps with
+        | Some index -> index
+        | None -> failwith ("missing step: " ^ prefix))
+      prefixes
+  in
+  indices = List.sort_uniq Int.compare indices
+
 let lists_supported result supported =
   match result with
   | Ok _ -> false
