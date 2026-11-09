@@ -40,9 +40,8 @@ module type S = sig
     application ->
     resolution ->
     (Build_plan.t * Build_plan.t option, Kiln_core.Error.t) result
-  (** Generate a validated plan, and for a development image without the
-      application directory, the scratch stage that holds the one its build step
-      produces. *)
+  (** Generate a validated plan, and the stage whose [/app] the application's
+      build step produces, if it has one. *)
 end
 
 type t = (module S)

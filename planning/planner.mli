@@ -3,8 +3,6 @@
 type prepared = private {
   plan : Build_plan.t;
   output : Build_plan.t option;
-      (** The application directory a development image leaves to its build
-          step. *)
   secrets : Environment.Names.t;
   resolution : Yojson.Basic.t;
   detected : string list;

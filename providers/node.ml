@@ -421,17 +421,7 @@ let plan app r =
   in
   let* dependencies = stage (Stage builder) installation in
   let* build = stage (Stage dependencies) (source @ app.build) in
-  let application = [ "**/node_modules"; ".kiln-emulate" ] in
-  let modules, built =
-    if app.development then (dependencies, [])
-    else
-      ( build,
-        [
-          copy ~owner:(10001, 10001) ~exclude:application build [ "/app/" ]
-            "/app/";
-        ] )
-  in
-  let* image =
+  let+ image =
     stage (Image r.runtime)
       ([ Workdir "/app"; Env runtime_env ]
       @ manager_env
@@ -446,20 +436,19 @@ let plan app r =
           r.manager_install
       @ copy ~owner:(10001, 10001)
           ~exclude:[ "*"; "!**/node_modules" ]
-          modules [ "/app/" ] "/app/"
-        :: built
+          (if app.development then dependencies else build)
+          [ "/app/" ] "/app/"
+        ::
+        (if app.development then []
+         else
+           [
+             copy ~owner:(10001, 10001)
+               ~exclude:[ "**/node_modules"; ".kiln-emulate" ]
+               build [ "/app/" ] "/app/";
+           ])
       @ [ User (10001, 10001); Start app.command ])
   in
-  let+ output =
-    match (app.development, app.build) with
-    | true, _ :: _ ->
-        let+ output =
-          stage Scratch [ copy ~exclude:application build [ "/app/" ] "/" ]
-        in
-        Some output
-    | false, _ | _, [] -> Ok None
-  in
-  (image, output)
+  (image, match app.build with [] -> None | _ :: _ -> Some build)
 
 let detect source =
   if not (Source.has source "package.json") then Ok Provider.No_match

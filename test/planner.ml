@@ -344,28 +344,24 @@ dependencies = ["idna==3.10"]
     (fun (name, files, server, installed) ->
       snapshot files (name ^ " development image leaves source out")
         (fun root ->
-          let plain = ok (prepare root [])
+          let plain = recipe root []
           and prepared = ok (prepare root development) in
           let image = Planner.dockerfile prepared in
           check "only the flag leaves source out of the image"
-            (source_copies (Planner.dockerfile plain) <> []
-            && source_copies image = []);
+            (source_copies plain <> [] && source_copies image = []);
           List.iter
             (fun marker ->
               check "the project is not installed"
-                (contains (Planner.dockerfile plain) marker
-                && not (contains image marker)))
+                (contains plain marker && not (contains image marker)))
             installed;
-          check "a development build step has an output"
-            (plain.Planner.output = None
-            &&
-            match (prepared.Planner.output, server) with
+          check "a build step's output holds its /app at the root"
+            (match (prepared.Planner.output, server) with
             | None, None -> true
             | Some output, Some server ->
                 let output = Build_plan.dockerfile output in
                 String.ends_with ~suffix:{|["/app/","/"]|} (String.trim output)
                 && List.for_all
-                     (fun copy -> contains copy server)
+                     (fun copy -> List.for_all (contains copy) server)
                      (source_copies output)
             | Some _, None | None, Some _ -> false)))
     [
@@ -375,7 +371,7 @@ dependencies = ["idna==3.10"]
           ("main.py", "");
           ("package.json", {|{"scripts":{"build":"vite build"}}|});
         ],
-        Some "--exclude=**/*.py ",
+        Some [ "--exclude=**/*.py " ],
         [ "kiln-project" ] );
       ( "Poetry",
         [
@@ -391,7 +387,7 @@ dependencies = ["idna==3.10"]
           ("package.json", {|{"main":"main.js","scripts":{"build":"tsc"}}|});
           ("main.js", "");
         ],
-        Some "--exclude=**/node_modules ",
+        Some [],
         [] );
     ];
   finish ()

@@ -14,7 +14,7 @@ let prepare { Provider.provider = (module P); detected } (request : Request.t)
     source =
   let* app = P.load request source in
   let* resolved = P.resolve app in
-  let* plan, output = P.plan app resolved in
+  let* plan, build = P.plan app resolved in
   let runtime =
     List.map
       (fun vars -> Build_plan.Env vars)
@@ -28,6 +28,20 @@ let prepare { Provider.provider = (module P); detected } (request : Request.t)
   let* plan =
     Build_plan.stage (Build_plan.base plan)
       (Build_plan.operations plan @ runtime)
+  in
+  let* output =
+    match (request.Request.development, build) with
+    | true, Some build ->
+        let+ output =
+          Build_plan.stage Build_plan.Scratch
+            [
+              Build_plan.copy
+                ~exclude:[ "**/node_modules"; ".kiln-emulate" ]
+                build [ "/app/" ] "/";
+            ]
+        in
+        Some output
+    | false, _ | _, None -> Ok None
   in
   if request.Request.error_missing_start && Build_plan.startup plan = None then
     Error Kiln_core.Error.Missing_start
@@ -82,16 +96,13 @@ let dockerfile prepared =
   Build_plan.dockerfile ~secrets:prepared.secrets prepared.plan
 
 let encode prepared =
-  let output =
-    Option.fold ~none:[]
-      ~some:(fun output ->
-        [
-          ( "output",
-            `String (Build_plan.dockerfile ~secrets:prepared.secrets output) );
-        ])
-      prepared.output
+  let render plan =
+    `String (Build_plan.dockerfile ~secrets:prepared.secrets plan)
   in
   Json.encode
     (`Assoc
-       ((("dockerfile", `String (dockerfile prepared)) :: output)
+       (("dockerfile", render prepared.plan)
+        :: List.map
+             (fun output -> ("output", render output))
+             (Option.to_list prepared.output)
        @ info prepared))

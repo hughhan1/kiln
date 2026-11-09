@@ -846,7 +846,7 @@ let plan app resolved =
         "/usr/local/lib";
       ]
   in
-  let* image =
+  let+ image =
     stage (Image resolved.runtime)
       ([
          Workdir "/app";
@@ -860,14 +860,7 @@ let plan app resolved =
         | _ :: _ -> [])
       @ [ User (1000, 1000); Entrypoint None; Start app.start ])
   in
-  let+ output =
-    match (app.server, app.build) with
-    | _ :: _, _ :: _ ->
-        let+ output = stage Scratch [ copy build [ "/app/" ] "/" ] in
-        Some output
-    | [], _ | _, [] -> Ok None
-  in
-  (image, output)
+  (image, match app.build with [] -> None | _ :: _ -> Some build)
 
 let packages app r =
   Package.resolve "python" app.python_declarations (Version.show r.python)
