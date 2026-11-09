@@ -214,24 +214,20 @@ let () =
       (fun root -> checks (Planner.dockerfile (ok (prepare root []))))
   in
   frontend {|{"scripts":{"build":"vite build"}}|}
-    "a package.json build runs on the build platform" (fun dockerfile ->
-      check "the build follows the dependency check for the build platform"
+    "a package.json build installs before the source on the build platform"
+    (fun dockerfile ->
+      check "manifests, install, source without Python's files, then build"
         (ordered
            (String.split_on_char '\n' dockerfile)
            [
              "FROM --platform=$BUILDPLATFORM docker.io/library/node";
-             "RUN [\"/bin/sh\",\"-c\",\"cpu=$(node -p process.arch)";
-             {|RUN ["/bin/sh","-c","[ -e .kiln-emulate ] || exec \"$@\"","kiln","npm","run","build"]|};
+             {|COPY ["package.json","./"]|};
+             {|RUN ["npm","install"]|};
+             "COPY --exclude=.git --exclude=**/.git --exclude=requirements.txt";
+             {|RUN ["npm","run","build"]|};
            ]);
-      check "the target installs and builds when the check fails"
-        (ordered
-           (String.split_on_char '\n' dockerfile)
-           [
-             {|RUN ["/bin/sh","-c","[ ! -e .kiln-emulate ] || exec \"$@\"","kiln","npm","install"]|};
-             {|RUN ["/bin/sh","-c","[ ! -e .kiln-emulate ] || exec \"$@\"","kiln","npm","run","build"]|};
-           ]);
-      check "node_modules and the marker stay out of the image"
-        (contains dockerfile "--exclude=**/node_modules --exclude=.kiln-emulate"));
+      check "node_modules stays out of the image"
+        (contains dockerfile {|--exclude=**/node_modules ["/app/","/app/"]|}));
   frontend {|{"devDependencies":{"prettier":"3.0.0"}}|}
     "a package.json without a build script builds nothing" (fun dockerfile ->
       check "no Node stage" (not (contains dockerfile "npm")));

@@ -349,10 +349,9 @@ let native app r =
   | Manifests _, Pnpm | Whole_source, _ -> false
 
 (* An install script may compile for the platform it runs on, so a package set
-   with one installs under emulation. [cpu] sets $cpu to the platform's npm name. *)
-let native_npm cpu =
-  cpu
-  ^ {|
+   with one installs under emulation. *)
+let native_npm =
+  {|case "$TARGETARCH" in amd64) cpu=x64 ;; arm64) cpu=arm64 ;; esac
 if npm install --os=linux --cpu="$cpu" --libc=glibc --ignore-scripts \
   && ! grep -qs '"hasInstallScript": true' node_modules/.package-lock.json; then
   echo "kiln: installed Node dependencies natively for $cpu"
@@ -401,6 +400,14 @@ let unless test =
       | Prepend_path _ | Write _ ) as operation ->
         Ok operation)
 
+let install_steps app copy_source =
+  let install = Build_plan.Run app.install in
+  match app.inputs with
+  | Whole_source -> copy_source :: app.install_commands [ install ]
+  | Manifests paths ->
+      app.install_commands (Source.manifests paths @ [ install ])
+      @ [ copy_source ]
+
 let plan app r =
   let open Build_plan in
   let pm = name r.pm in
@@ -411,27 +418,18 @@ let plan app r =
   in
   let* builder = toolchain r (Image r.builder) in
   let copy_source = Source.copy ~exclude [ "." ] "." in
-  let install = Run app.install in
   let* steps =
     match app.inputs with
-    | Whole_source -> Ok (copy_source :: app.install_commands [ install ])
     | Manifests paths when native app r ->
         let* base = toolchain r (Native r.builder) in
-        let* native_install =
-          shell
-            (native_npm
-               {|case "$TARGETARCH" in amd64) cpu=x64 ;; arm64) cpu=arm64 ;; esac|})
-        in
+        let* native_install = shell native_npm in
         let* installed =
           stage (Stage base) (Source.manifests paths @ [ Run native_install ])
         in
-        let+ emulated = unless "[ ! -e .kiln-emulate ]" [ install ] in
+        let+ emulated = unless "[ ! -e .kiln-emulate ]" [ Run app.install ] in
         app.install_commands (copy installed [ "/app/" ] "/app/" :: emulated)
         @ [ copy_source ]
-    | Manifests paths ->
-        Ok
-          (app.install_commands (Source.manifests paths @ [ install ])
-          @ [ copy_source ])
+    | Manifests _ | Whole_source -> Ok (install_steps app copy_source)
   in
   let* build = stage (Stage builder) (steps @ app.build) in
   stage (Image r.runtime)
@@ -524,27 +522,9 @@ let frontend ~exclude source =
     | _ :: _ ->
         let open Build_plan in
         let* r = resolve app in
-        let commands = Run app.install :: app.build in
-        let copy_source = Source.copy ~exclude [ "." ] "." in
-        let* steps =
-          match app.inputs with
-          | Manifests paths when native app r ->
-              let* base = toolchain r (Native r.builder) in
-              let* check = shell (native_npm "cpu=$(node -p process.arch)") in
-              let* build = unless "[ -e .kiln-emulate ]" app.build in
-              let* built =
-                stage (Stage base)
-                  (Source.manifests paths @ (Run check :: copy_source :: build))
-              in
-              let+ fallback = unless "[ ! -e .kiln-emulate ]" commands in
-              copy ~exclude:[ "**/node_modules" ] built [ "/app/" ] "/app/"
-              :: fallback
-          | Manifests _ | Whole_source -> Ok (copy_source :: commands)
+        let* base = toolchain r (Native r.builder) in
+        let+ output =
+          stage (Stage base)
+            (install_steps app (Source.copy ~exclude [ "." ] ".") @ app.build)
         in
-        let* target = toolchain r (Image r.builder) in
-        let+ output = stage (Stage target) steps in
-        [
-          copy
-            ~exclude:[ "**/node_modules"; ".kiln-emulate" ]
-            output [ "/app/" ] "/app/";
-        ]
+        [ copy ~exclude:[ "**/node_modules" ] output [ "/app/" ] "/app/" ]

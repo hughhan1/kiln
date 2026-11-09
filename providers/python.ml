@@ -25,7 +25,7 @@ let exclude =
     ".ruff_cache";
   ]
 
-let inputs =
+let manifests =
   [
     "requirements.txt";
     "pyproject.toml";
@@ -33,13 +33,11 @@ let inputs =
     "poetry.lock";
     "pdm.lock";
     ".python-version";
-    "main.py";
   ]
 
 let detect source =
   Ok
-    (if List.exists (Source.has source) (List.filter (( <> ) "main.py") inputs)
-     then Provider.Explicit
+    (if List.exists (Source.has source) manifests then Provider.Explicit
      else if Source.has source "main.py" then Provider.Fallback
      else Provider.No_match)
 
@@ -298,7 +296,7 @@ let install_inputs source install ~installable ~requirements ~project ~lock
 
 let load request source =
   let* () =
-    if List.exists (Source.has source) inputs then Ok ()
+    if List.exists (Source.has source) ("main.py" :: manifests) then Ok ()
     else
       Json.metadata "Python"
         "requires a Python manifest, version file, or root main.py"
@@ -475,7 +473,9 @@ let load request source =
         None
   in
   let server = if request.Request.development then [ "*.py" ] else [] in
-  let* frontend = Node.frontend ~exclude:(server @ exclude) source in
+  let* frontend =
+    Node.frontend ~exclude:(server @ manifests @ exclude) source
+  in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
   in
