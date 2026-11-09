@@ -116,6 +116,7 @@ let plan app resolved =
       Entrypoint None;
       Start app.start;
     ]
+  |> Result.map (fun runtime -> (runtime, None))
 
 let packages app r = [ Semver_image.package id app.requirements r ]
 let metadata _ _ = [ ("nodeRuntime", "bun"); ("nodePackageManager", "bun") ]

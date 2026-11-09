@@ -162,3 +162,4 @@ let plan app resolved =
       Entrypoint None;
       Start app.start;
     ]
+  |> Result.map (fun runtime -> (runtime, None))

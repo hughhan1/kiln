@@ -37,8 +37,12 @@ module type S = sig
   val metadata : application -> resolution -> (string * string) list
 
   val plan :
-    application -> resolution -> (Build_plan.t, Kiln_core.Error.t) result
-  (** Generate a validated plan. *)
+    application ->
+    resolution ->
+    (Build_plan.t * Build_plan.t option, Kiln_core.Error.t) result
+  (** Generate a validated plan, and for a development image without the
+      application directory, the scratch stage that holds the one its build step
+      produces. *)
 end
 
 type t = (module S)

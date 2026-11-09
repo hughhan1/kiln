@@ -27,7 +27,7 @@ let own_steps stage = List.filter_map step (Build_plan.operations stage)
 let rec inherited_steps stage =
   (match Build_plan.base stage with
     | Build_plan.Stage parent -> inherited_steps parent
-    | Build_plan.Image _ | Build_plan.Native _ -> [])
+    | Build_plan.Scratch | Build_plan.Image _ | Build_plan.Native _ -> [])
   @ own_steps stage
 
 let steps prepared =

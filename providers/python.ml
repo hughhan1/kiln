@@ -846,22 +846,28 @@ let plan app resolved =
         "/usr/local/lib";
       ]
   in
-  stage (Image resolved.runtime)
-    ([
-       Workdir "/app";
-       Env env;
-       compile_stdlib;
-       copy ~owner:(1000, 1000) venv_source [ "/opt/venv/" ] "/opt/venv/";
-     ]
-    @ project
-    @ [
-        copy ~owner:(1000, 1000)
-          ~exclude:(Source.everywhere app.server)
-          build [ "/app/" ] "/app/";
-        User (1000, 1000);
-        Entrypoint None;
-        Start app.start;
-      ])
+  let* image =
+    stage (Image resolved.runtime)
+      ([
+         Workdir "/app";
+         Env env;
+         compile_stdlib;
+         copy ~owner:(1000, 1000) venv_source [ "/opt/venv/" ] "/opt/venv/";
+       ]
+      @ project
+      @ (match app.server with
+        | [] -> [ copy ~owner:(1000, 1000) build [ "/app/" ] "/app/" ]
+        | _ :: _ -> [])
+      @ [ User (1000, 1000); Entrypoint None; Start app.start ])
+  in
+  let+ output =
+    match (app.server, app.build) with
+    | _ :: _, _ :: _ ->
+        let+ output = stage Scratch [ copy build [ "/app/" ] "/" ] in
+        Some output
+    | [], _ | _, [] -> Ok None
+  in
+  (image, output)
 
 let packages app r =
   Package.resolve "python" app.python_declarations (Version.show r.python)

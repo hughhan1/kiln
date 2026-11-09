@@ -33,6 +33,7 @@ type stage
 type image_reference
 
 type base =
+  | Scratch
   | Image of image
   | Native of image
       (** Pinned to the build platform, where [$TARGETARCH] names the target. *)

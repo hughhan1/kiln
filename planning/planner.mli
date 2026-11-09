@@ -2,6 +2,9 @@
 
 type prepared = private {
   plan : Build_plan.t;
+  output : Build_plan.t option;
+      (** The application directory a development image leaves to its build
+          step. *)
   secrets : Environment.Names.t;
   resolution : Yojson.Basic.t;
   detected : string list;
@@ -18,7 +21,8 @@ val prepare :
     generate the plan. *)
 
 val encode : prepared -> string
-(** Serialize the Dockerfile together with preparation metadata. *)
+(** Serialize the Dockerfile and any output Dockerfile together with preparation
+    metadata. *)
 
 val warnings : prepared -> string list
 (** Human-readable preparation warnings, also emitted in JSON metadata. *)

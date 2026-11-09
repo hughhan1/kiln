@@ -2,6 +2,7 @@ open Result.Syntax
 
 type prepared = {
   plan : Build_plan.t;
+  output : Build_plan.t option;
   secrets : Environment.Names.t;
   resolution : Yojson.Basic.t;
   detected : string list;
@@ -13,7 +14,7 @@ let prepare { Provider.provider = (module P); detected } (request : Request.t)
     source =
   let* app = P.load request source in
   let* resolved = P.resolve app in
-  let* plan = P.plan app resolved in
+  let* plan, output = P.plan app resolved in
   let runtime =
     List.map
       (fun vars -> Build_plan.Env vars)
@@ -34,6 +35,7 @@ let prepare { Provider.provider = (module P); detected } (request : Request.t)
     Ok
       {
         plan;
+        output;
         secrets = request.Request.secrets;
         detected;
         packages = P.packages app resolved;
@@ -80,5 +82,16 @@ let dockerfile prepared =
   Build_plan.dockerfile ~secrets:prepared.secrets prepared.plan
 
 let encode prepared =
+  let output =
+    Option.fold ~none:[]
+      ~some:(fun output ->
+        [
+          ( "output",
+            `String (Build_plan.dockerfile ~secrets:prepared.secrets output) );
+        ])
+      prepared.output
+  in
   Json.encode
-    (`Assoc (("dockerfile", `String (dockerfile prepared)) :: info prepared))
+    (`Assoc
+       ((("dockerfile", `String (dockerfile prepared)) :: output)
+       @ info prepared))

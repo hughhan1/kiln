@@ -107,7 +107,7 @@ type application = {
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   inputs : inputs;
   build : Build_plan.operation list;
-  overlaid : string list;
+  development : bool;
   command : Build_plan.argv option;
 }
 
@@ -165,15 +165,6 @@ let install_inputs (snapshot : snapshot) =
                "pnpm-workspace.yaml";
              ])
          snapshot.files)
-
-let exclusion_character = function
-  | ( 'a' .. 'z'
-    | 'A' .. 'Z'
-    | '0' .. '9'
-    | '/' | '.' | '_' | '-'
-    | '\128' .. '\255' ) as c ->
-      c
-  | _ -> '?'
 
 let interpret (request : Request.t) (snapshot : snapshot) =
   let packages = snapshot.packages in
@@ -237,10 +228,7 @@ let interpret (request : Request.t) (snapshot : snapshot) =
       Request.build_command request
         (if Javascript.has_script pkg "build" then [ Build_plan.Run build_argv ]
          else []);
-    overlaid =
-      (if request.Request.development then
-         List.map (String.map exclusion_character) snapshot.files
-       else []);
+    development = request.Request.development;
     command;
   }
 
@@ -403,10 +391,10 @@ let unless test =
 let install_steps app copy_source =
   let install = Build_plan.Run app.install in
   match app.inputs with
-  | Whole_source -> copy_source :: app.install_commands [ install ]
+  | Whole_source -> (copy_source :: app.install_commands [ install ], [])
   | Manifests paths ->
-      app.install_commands (Source.manifests paths @ [ install ])
-      @ [ copy_source ]
+      ( app.install_commands (Source.manifests paths @ [ install ]),
+        [ copy_source ] )
 
 let plan app r =
   let open Build_plan in
@@ -418,7 +406,7 @@ let plan app r =
   in
   let* builder = toolchain r (Image r.builder) in
   let copy_source = Source.copy ~exclude [ "." ] "." in
-  let* steps =
+  let* installation, source =
     match app.inputs with
     | Manifests paths when native app r ->
         let* base = toolchain r (Native r.builder) in
@@ -427,33 +415,51 @@ let plan app r =
           stage (Stage base) (Source.manifests paths @ [ Run native_install ])
         in
         let+ emulated = unless "[ ! -e .kiln-emulate ]" [ Run app.install ] in
-        app.install_commands (copy installed [ "/app/" ] "/app/" :: emulated)
-        @ [ copy_source ]
+        ( app.install_commands (copy installed [ "/app/" ] "/app/" :: emulated),
+          [ copy_source ] )
     | Manifests _ | Whole_source -> Ok (install_steps app copy_source)
   in
-  let* build = stage (Stage builder) (steps @ app.build) in
-  stage (Image r.runtime)
-    ([ Workdir "/app"; Env runtime_env ]
-    @ manager_env
-    @ Option.fold ~none:[]
-        ~some:(fun _ ->
-          [
-            copy builder
-              [ "/usr/local/lib/node_modules/" ^ pm ^ "/" ]
-              ("/usr/local/lib/node_modules/" ^ pm ^ "/");
-            copy builder [ "/usr/local/bin/" ] "/usr/local/bin/";
-          ])
-        r.manager_install
-    @ [
-        copy ~owner:(10001, 10001)
+  let* dependencies = stage (Stage builder) installation in
+  let* build = stage (Stage dependencies) (source @ app.build) in
+  let application = [ "**/node_modules"; ".kiln-emulate" ] in
+  let modules, built =
+    if app.development then (dependencies, [])
+    else
+      ( build,
+        [
+          copy ~owner:(10001, 10001) ~exclude:application build [ "/app/" ]
+            "/app/";
+        ] )
+  in
+  let* image =
+    stage (Image r.runtime)
+      ([ Workdir "/app"; Env runtime_env ]
+      @ manager_env
+      @ Option.fold ~none:[]
+          ~some:(fun _ ->
+            [
+              copy builder
+                [ "/usr/local/lib/node_modules/" ^ pm ^ "/" ]
+                ("/usr/local/lib/node_modules/" ^ pm ^ "/");
+              copy builder [ "/usr/local/bin/" ] "/usr/local/bin/";
+            ])
+          r.manager_install
+      @ copy ~owner:(10001, 10001)
           ~exclude:[ "*"; "!**/node_modules" ]
-          build [ "/app/" ] "/app/";
-        copy ~owner:(10001, 10001)
-          ~exclude:("**/node_modules" :: ".kiln-emulate" :: app.overlaid)
-          build [ "/app/" ] "/app/";
-        User (10001, 10001);
-        Start app.command;
-      ])
+          modules [ "/app/" ] "/app/"
+        :: built
+      @ [ User (10001, 10001); Start app.command ])
+  in
+  let+ output =
+    match (app.development, app.build) with
+    | true, _ :: _ ->
+        let+ output =
+          stage Scratch [ copy ~exclude:application build [ "/app/" ] "/" ]
+        in
+        Some output
+    | false, _ | _, [] -> Ok None
+  in
+  (image, output)
 
 let detect source =
   if not (Source.has source "package.json") then Ok Provider.No_match
@@ -523,8 +529,8 @@ let frontend ~exclude source =
         let open Build_plan in
         let* r = resolve app in
         let* base = toolchain r (Native r.builder) in
-        let+ output =
-          stage (Stage base)
-            (install_steps app (Source.copy ~exclude [ "." ] ".") @ app.build)
+        let installation, source =
+          install_steps app (Source.copy ~exclude [ "." ] ".")
         in
+        let+ output = stage (Stage base) (installation @ source @ app.build) in
         [ copy ~exclude:[ "**/node_modules" ] output [ "/app/" ] "/app/" ]

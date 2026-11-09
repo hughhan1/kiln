@@ -64,7 +64,7 @@ let image value =
 let image_ref image = image
 
 type stage = { base : base; operations : operation list }
-and base = Image of image | Native of image | Stage of stage
+and base = Scratch | Image of image | Native of image | Stage of stage
 and input = Context | Output of stage | External of image_reference
 and image_reference = string
 
@@ -123,7 +123,7 @@ let stages root =
     else
       let seen =
         match stage.base with
-        | Image _ | Native _ -> seen
+        | Scratch | Image _ | Native _ -> seen
         | Stage parent -> visit seen parent
       in
       let seen =
@@ -143,7 +143,7 @@ let stages root =
 let rec startup stage =
   let inherited () =
     match stage.base with
-    | Image _ | Native _ -> None
+    | Scratch | Image _ | Native _ -> None
     | Stage parent -> startup parent
   in
   let rec local fallback = function
@@ -202,6 +202,7 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
     | None ->
         let base =
           match stage.base with
+          | Scratch -> "scratch"
           | Image image -> image_ref image
           | Native image -> "--platform=$BUILDPLATFORM " ^ image_ref image
           | Stage parent -> name parent
@@ -212,7 +213,7 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
         Buffer.add_string output ("FROM " ^ base ^ " AS " ^ name ^ "\n");
         (match stage.base with
         | Native _ -> Buffer.add_string output "ARG TARGETARCH\n"
-        | Image _ | Stage _ -> ());
+        | Scratch | Image _ | Stage _ -> ());
         if not (Environment.Names.is_empty secrets) then
           Buffer.add_string output "ARG KILN_SECRETS_HASH\n";
         List.iter
@@ -234,12 +235,7 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
             owner
         in
         "COPY " ^ prefix ^ owner
-        ^ String.concat ""
-            (List.mapi
-               (fun i p ->
-                 (if i > 0 && i mod 64 = 0 then "\\\n  " else "")
-                 ^ "--exclude=" ^ p ^ " ")
-               exclude)
+        ^ String.concat "" (List.map (fun p -> "--exclude=" ^ p ^ " ") exclude)
         ^ json (paths @ [ destination ])
     | Workdir path -> "WORKDIR " ^ Json.encode (`String path)
     | Env pairs ->

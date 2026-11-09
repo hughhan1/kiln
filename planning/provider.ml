@@ -16,7 +16,11 @@ module type S = sig
   val encode : resolution -> Yojson.Basic.t
   val packages : application -> resolution -> Package.t list
   val metadata : application -> resolution -> (string * string) list
-  val plan : application -> resolution -> (Build_plan.t, Error.t) result
+
+  val plan :
+    application ->
+    resolution ->
+    (Build_plan.t * Build_plan.t option, Error.t) result
 end
 
 type t = (module S)

@@ -335,21 +335,39 @@ dependencies = ["idna==3.10"]
 |}
   in
   let development = [ ("development", `Bool true) ] in
+  let source_copies dockerfile =
+    List.filter
+      (fun line -> contains line "COPY --exclude" && contains line {|[".",|})
+      (String.split_on_char '\n' dockerfile)
+  in
   List.iter
-    (fun (name, files, source, copies, installed) ->
+    (fun (name, files, server, installed) ->
       snapshot files (name ^ " development image leaves source out")
         (fun root ->
-          let plain = recipe root [] and image = recipe root development in
-          let count text =
-            String.find_all ~sub:source (fun _ n -> n + 1) text 0
-          in
-          check "only the flag excludes source"
-            (count plain = 0 && count image = copies);
+          let plain = ok (prepare root [])
+          and prepared = ok (prepare root development) in
+          let image = Planner.dockerfile prepared in
+          check "only the flag leaves source out of the image"
+            (source_copies (Planner.dockerfile plain) <> []
+            && source_copies image = []);
           List.iter
             (fun marker ->
               check "the project is not installed"
-                (contains plain marker && not (contains image marker)))
-            installed))
+                (contains (Planner.dockerfile plain) marker
+                && not (contains image marker)))
+            installed;
+          check "a development build step has an output"
+            (plain.Planner.output = None
+            &&
+            match (prepared.Planner.output, server) with
+            | None, None -> true
+            | Some output, Some server ->
+                let output = Build_plan.dockerfile output in
+                String.ends_with ~suffix:{|["/app/","/"]|} (String.trim output)
+                && List.for_all
+                     (fun copy -> contains copy server)
+                     (source_copies output)
+            | Some _, None | None, Some _ -> false)))
     [
       ( "pip",
         [
@@ -357,8 +375,7 @@ dependencies = ["idna==3.10"]
           ("main.py", "");
           ("package.json", {|{"scripts":{"build":"vite build"}}|});
         ],
-        "--exclude=**/*.py ",
-        3,
+        Some "--exclude=**/*.py ",
         [ "kiln-project" ] );
       ( "Poetry",
         [
@@ -367,23 +384,14 @@ dependencies = ["idna==3.10"]
             ^ "[build-system]\nbuild-backend = \"poetry.core.masonry.api\"\n" );
           ("main.py", "");
         ],
-        "--exclude=**/*.py ",
-        2,
+        None,
         [ {|"--no-ansi"]|} ] );
       ( "Node",
-        [ ("package.json", {|{"main":"[id].js"}|}); ("[id].js", "") ],
-        "--exclude=?id?.js ",
-        1,
+        [
+          ("package.json", {|{"main":"main.js","scripts":{"build":"tsc"}}|});
+          ("main.js", "");
+        ],
+        Some "--exclude=**/node_modules ",
         [] );
     ];
-  snapshot files "development exclusions fit BuildKit's line limit" (fun root ->
-      for i = 1 to 2000 do
-        write root
-          (Printf.sprintf "%04d-a-rather-long-source-file-name.js" i)
-          ""
-      done;
-      check "every line fits"
-        (List.for_all
-           (fun line -> String.length line < 65536)
-           (String.split_on_char '\n' (recipe root development))));
   finish ()

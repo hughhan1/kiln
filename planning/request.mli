@@ -30,7 +30,8 @@ type t = private {
   config_file : string;
   variables : Build_plan.environment option;
   development : bool;
-      (** Leave server source out of the image, keeping dependencies and build
+      (** Leave the application directory out of the image, keeping its
+          dependencies, and plan what the build step produces as a separate
           output. *)
 }
 
