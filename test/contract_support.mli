@@ -9,6 +9,9 @@ val ok : ('a, Kiln_core.Error.t) result -> 'a
 val contains : string -> string -> bool
 (** Substring assertion predicate, with haystack first. *)
 
+val ordered : string list -> string list -> bool
+(** Whether the first step starting with each prefix occurs in list order. *)
+
 val lists_supported : ('a, Kiln_core.Error.t) result -> string list -> bool
 (** Whether a failure names exactly these supported versions. *)
 

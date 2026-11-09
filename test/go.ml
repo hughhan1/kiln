@@ -21,6 +21,25 @@ let () =
       check "explicit toolchain"
         (Yojson.Basic.Util.member "resolvedVersion" (package plan "go")
         = `String newest));
+  snapshot
+    [
+      ("go.mod", go_mod oldest newest);
+      ("server.go", "package main");
+      ("package.json", {|{"scripts":{"build":"vite build"}}|});
+    ]
+    "a package.json build runs before go build, without Go's files"
+    (fun root ->
+      let dockerfile = Planner.dockerfile (ok (prepare root [])) in
+      check "frontend, then go build"
+        (ordered
+           (String.split_on_char '\n' dockerfile)
+           [
+             "FROM --platform=$BUILDPLATFORM docker.io/library/node";
+             "COPY --exclude=.git --exclude=**/.git --exclude=*.go";
+             {|RUN ["npm","run","build"]|};
+             "COPY --from=s1 --exclude=**/node_modules";
+             {|RUN ["/bin/sh","-c","test|};
+           ]));
   List.iter
     (fun (label, files) ->
       snapshot files label (fun root ->

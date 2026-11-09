@@ -96,6 +96,9 @@ let load request source =
   let* install =
     Request.install_command request [ "go"; "mod"; "download"; "all" ]
   in
+  let* frontend =
+    Node.frontend ~exclude:([ "*.go"; "go.mod"; "go.sum" ] @ exclude) source
+  in
   let* build =
     Build_plan.shell
       {|test "$(go list -mod=readonly -f '{{.Name}}' .)" = main || { echo 'Go applications require one executable root package' >&2; exit 1; }
@@ -108,7 +111,7 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
       minimum;
       install;
       install_commands = Request.install_commands request;
-      build = Request.build_command request [ Build_plan.Run build ];
+      build = Request.build_command request (frontend @ [ Build_plan.Run build ]);
       start;
     }
 
