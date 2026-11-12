@@ -156,28 +156,15 @@ let project source path document =
       sources
   in
   let* pdm = Toml.field document [ "tool"; "pdm" ] Otoml.get_value in
-  let pdm_source_urls =
-    let rec collect key = function
-      | Otoml.TomlTable values | Otoml.TomlInlineTable values ->
-          List.concat_map (fun (name, value) -> collect name value) values
-      | Otoml.TomlTableArray values | Otoml.TomlArray values ->
-          List.concat_map (collect key) values
-      | Otoml.TomlString value when key = "url" -> [ value ]
-      | Otoml.TomlString _ | Otoml.TomlInteger _ | Otoml.TomlFloat _
-      | Otoml.TomlBoolean _ | Otoml.TomlOffsetDateTime _
-      | Otoml.TomlLocalDateTime _ | Otoml.TomlLocalDate _
-      | Otoml.TomlLocalTime _ ->
-          []
-    in
-    Option.fold ~none:[] ~some:(collect "") pdm
-  in
   let* urls =
     Support.traverse
-      (fun url ->
-        if String.starts_with ~prefix:"file:" url || String.contains url '$'
+      (fun (key, url) ->
+        if
+          key = "url"
+          && (String.starts_with ~prefix:"file:" url || String.contains url '$')
         then reference ~project_root:true source ~from:path url
         else Ok false)
-      pdm_source_urls
+      (Option.fold ~none:[] ~some:Toml.keyed_strings pdm)
   in
   let* members =
     Toml.strings document [ "tool"; "uv"; "workspace"; "members" ]

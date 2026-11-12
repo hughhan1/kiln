@@ -2,8 +2,24 @@ let fail ?(code = 1) message =
   prerr_endline message;
   exit code
 
+(* Resolve existing paths and normalize missing components, so two spellings of
+   one output file compare equal. *)
+let rec absolute path =
+  if Sys.file_exists path then Unix.realpath path
+  else
+    let parent = absolute (Filename.dirname path) in
+    match Filename.basename path with
+    | "." -> parent
+    | ".." -> Filename.dirname parent
+    | name -> Filename.concat parent name
+
+let rec mkdir path =
+  if not (Sys.file_exists path) then (
+    mkdir (Filename.dirname path);
+    try Unix.mkdir path 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
+
 let write path contents =
-  Kiln_io.Path.mkdir ~perm:0o755 (Filename.dirname path);
+  mkdir (Filename.dirname path);
   Out_channel.with_open_bin path (fun channel ->
       Out_channel.output_string channel contents)
 
@@ -12,7 +28,7 @@ let request directory provider start build_cmd start_cmd config_file
   let environment =
     match Kiln_planning.Environment.of_args ~getenv:Sys.getenv_opt entries with
     | Ok environment -> environment
-    | Error error -> fail (Kiln_core.Error.show error)
+    | Error error -> fail (Kiln_planning.Error.show error)
   in
   let directory = Unix.realpath directory in
   let fields =
@@ -40,8 +56,7 @@ let request directory provider start build_cmd start_cmd config_file
 
 let prepare (directory, fields) plan_out info_out show_plan hide_pretty =
   (match (plan_out, info_out) with
-  | Some plan, Some info
-    when Kiln_io.Path.absolute plan = Kiln_io.Path.absolute info ->
+  | Some plan, Some info when absolute plan = absolute info ->
       fail "plan-out and info-out must be different files"
   | _ -> ());
   let info fields =
@@ -49,11 +64,11 @@ let prepare (directory, fields) plan_out info_out show_plan hide_pretty =
       (fun path -> write path (Yojson.Basic.to_string (`Assoc fields) ^ "\n"))
       info_out
   in
-  match Kiln_io.Driver.prepare (Yojson.Basic.to_string (`Assoc fields)) with
+  match Kiln_io.Driver.prepare fields with
   | Error error ->
-      let message = Kiln_core.Error.show error in
+      let message = Kiln_planning.Error.show error in
       info (Kiln_planning.Planner.failure error);
-      fail ~code:(Kiln_core.Error.exit_status error) message
+      fail ~code:(Kiln_planning.Error.exit_status error) message
   | Ok prepared ->
       let dockerfile = Kiln_planning.Planner.dockerfile prepared in
       Option.iter (fun path -> write path dockerfile) plan_out;

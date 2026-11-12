@@ -1,4 +1,3 @@
-module Error = Kiln_core.Error
 open Result.Syntax
 
 type argv = { executable : string; arguments : string list }

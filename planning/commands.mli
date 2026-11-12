@@ -5,7 +5,7 @@ val decode : assets:(string * string) list -> t Json.decoder
     Command objects must describe exactly one operation. Strings run through the
     shell; [cmd] objects are parsed as executable-and-arguments. *)
 
-val shell : string -> (t, Kiln_core.Error.t) result
+val shell : string -> (t, Error.t) result
 (** A single shell command, without configuration shorthand or inheritance. *)
 
 val expand : t -> Build_plan.operation list -> Build_plan.operation list

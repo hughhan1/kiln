@@ -34,7 +34,7 @@ type t = private {
           output. *)
 }
 
-val decode : (string * Yojson.Basic.t) list -> (t, Kiln_core.Error.t) result
+val decode : (string * Yojson.Basic.t) list -> (t, Error.t) result
 (** Decode JSON request fields and defaults. Reject unsupported/empty target
     sets and simultaneous argv and shell startup. *)
 
@@ -44,7 +44,7 @@ val start : t -> Build_plan.argv option
 val build_command : t -> Build_plan.operation list -> Build_plan.operation list
 (** Expand configured operations and inheritance against a provider default. *)
 
-val configure : t -> Source.t -> (t, Kiln_core.Error.t) result
+val configure : t -> Source.t -> (t, Error.t) result
 (** Read contained JSONC configuration and apply its supported fields; an absent
     default railpack.json is allowed. *)
 
@@ -61,8 +61,7 @@ val replaces_install : t -> bool
 (** Whether a custom install command or install commands without inheritance
     replace the provider's installation, so it must see the whole source. *)
 
-val install_command :
-  t -> string list -> (Build_plan.argv, Kiln_core.Error.t) result
+val install_command : t -> string list -> (Build_plan.argv, Error.t) result
 (** Use a custom install command or validate the provider's default argv. *)
 
 val version : t -> string -> string option

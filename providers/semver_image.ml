@@ -2,8 +2,8 @@ module Build_plan = Kiln_planning.Build_plan
 module Package = Kiln_planning.Package
 module Support = Kiln_planning.Support
 open Result.Syntax
-module Semver = Kiln_core.Semver
-module Error = Kiln_core.Error
+module Semver = Kiln_planning.Semver
+module Error = Kiln_planning.Error
 
 type requirements = {
   declarations : Package.requirement list;

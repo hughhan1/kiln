@@ -1,7 +1,7 @@
 (library
  (name contract_support)
  (modules contract_support)
- (libraries kiln_core kiln_planning kiln_providers kiln_io unix yojson))
+ (libraries kiln_planning kiln_providers kiln_io unix yojson))
 
 (tests
  (names bun deno go installer node pins planner python semver)

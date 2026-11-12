@@ -27,16 +27,17 @@ val startup :
   override:Kiln_planning.Build_plan.argv option ->
   script:string list ->
   main:string list ->
-  (Kiln_planning.Build_plan.argv option, Kiln_core.Error.t) result
+  (Kiln_planning.Build_plan.argv option, Kiln_planning.Error.t) result
 (** Prefer an override, then the start script, then a nonempty main entry.
     Return [None] when no startup is declared. *)
 
 val load :
-  Kiln_planning.Source.t -> ((string * package) list, Kiln_core.Error.t) result
+  Kiln_planning.Source.t ->
+  ((string * package) list, Kiln_planning.Error.t) result
 (** Read every package.json in the snapshot and check all local references for
     containment. *)
 
-val root : Kiln_planning.Source.t -> (package, Kiln_core.Error.t) result
+val root : Kiln_planning.Source.t -> (package, Kiln_planning.Error.t) result
 (** Read only the root package.json for provider detection. *)
 
 val requests :
@@ -46,6 +47,6 @@ val requirements :
   path:string ->
   runtime:string ->
   package ->
-  (Kiln_planning.Package.requirement list, Kiln_core.Error.t) result
+  (Kiln_planning.Package.requirement list, Kiln_planning.Error.t) result
 (** Collect declarations for a runtime, rejecting declarations naming a
     different runtime or manager. *)

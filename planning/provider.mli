@@ -1,12 +1,18 @@
-(** Provider extension contract. Application and resolution types stay private
-    to each provider. *)
+(** Provider extension contract: detect an application in a snapshot, then
+    prepare its plan from the pinned toolchains. *)
 
 type detection = No_match | Fallback | Explicit
 
-module type S = sig
-  type application
-  type resolution
+type output = {
+  plan : Build_plan.t;
+  packages : Package.t list;
+      (** Resolved versions together with the declarations that selected them.
+      *)
+  metadata : (string * string) list;
+  resolution : Yojson.Basic.t;  (** The selected toolchain pins. *)
+}
 
+module type S = sig
   val id : string
   (** Stable implementation identifier. *)
 
@@ -17,28 +23,13 @@ module type S = sig
   val exclude : string list
   (** Directory/file basenames omitted throughout the source snapshot. *)
 
-  val detect : Source.t -> (detection, Kiln_core.Error.t) result
+  val detect : Source.t -> (detection, Error.t) result
   (** Classify source evidence; explicit matches take precedence over fallbacks.
   *)
 
-  val load : Request.t -> Source.t -> (application, Kiln_core.Error.t) result
-  (** Parse manifests and request overrides into the provider's application
-      type. *)
-
-  val resolve : application -> (resolution, Kiln_core.Error.t) result
-  (** Select immutable toolchain pins for the application. *)
-
-  val encode : resolution -> Yojson.Basic.t
-  (** Serialize a resolution for the plan's metadata. *)
-
-  val packages : application -> resolution -> Package.t list
-  (** Resolved versions together with the declarations that selected them. *)
-
-  val metadata : application -> resolution -> (string * string) list
-
-  val plan :
-    application -> resolution -> (Build_plan.t, Kiln_core.Error.t) result
-  (** Generate a validated plan. *)
+  val prepare : Request.t -> Source.t -> (output, Error.t) result
+  (** Parse manifests and request overrides, select immutable toolchain pins,
+      and generate a validated plan, failing in that order. *)
 end
 
 type t = (module S)
@@ -47,10 +38,7 @@ type selection = { provider : t; detected : string list }
 (** Selected implementation and the independently detected public names. *)
 
 val select :
-  t list ->
-  requested:string option ->
-  Source.t ->
-  (selection, Kiln_core.Error.t) result
+  t list -> requested:string option -> Source.t -> (selection, Error.t) result
 (** Detect every provider and prefer explicit evidence over fallback evidence.
     Restrict selection to a requested public name when supplied, allowing an
     undetected implementation if that name has no detection evidence. Require a

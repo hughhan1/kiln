@@ -4,8 +4,8 @@ module Package = Kiln_planning.Package
 module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
-module Semver = Kiln_core.Semver
-module Error = Kiln_core.Error
+module Semver = Kiln_planning.Semver
+module Error = Kiln_planning.Error
 open Result.Syntax
 
 let id = "go"
@@ -15,17 +15,6 @@ let exclude = [ "node_modules" ]
 let detect source =
   Ok
     (if Source.has source "go.mod" then Provider.Explicit else Provider.No_match)
-
-type application = {
-  requirements : Semver_image.requirements;
-  minimum : Semver.version;
-  install : Build_plan.argv;
-  install_commands : Build_plan.operation list -> Build_plan.operation list;
-  build : Build_plan.operation list;
-  start : Build_plan.argv option;
-}
-
-type resolution = { compiler : Semver_image.t; runtime : Build_plan.image }
 
 let words line =
   String.split_on_char ' '
@@ -55,7 +44,7 @@ let parse_version value =
     (fun message -> Error.Metadata ("go.mod", message))
     (Semver.version value)
 
-let load request source =
+let prepare request source =
   let* () =
     if
       List.exists
@@ -105,39 +94,13 @@ let load request source =
 test "$(CGO_ENABLED=1 go list -mod=readonly -f '{{len .CgoFiles}}' .)" = 0 || { echo 'CGo applications are unsupported' >&2; exit 1; }
 go build -mod=readonly -trimpath -o /app/bin/server .|}
   in
-  Ok
-    {
-      requirements;
-      minimum;
-      install;
-      install_commands = Request.install_commands request;
-      build = Request.build_command request (frontend @ [ Build_plan.Run build ]);
-      start;
-    }
-
-let resolve app =
   let* compiler =
     Semver_image.resolve ~tool:"Go"
-      ~accept:(fun version -> Semver.compare version app.minimum >= 0)
-      ~pins:Pins.golang app.requirements
+      ~accept:(fun version -> Semver.compare version minimum >= 0)
+      ~pins:Pins.golang requirements
   in
-  let+ runtime = Build_plan.image Pins.debian in
-  { compiler; runtime }
-
-let encode resolved =
-  `Assoc
-    [
-      ("compiler", Semver_image.encode resolved.compiler);
-      ("runtime", `String (Build_plan.image_ref resolved.runtime));
-    ]
-
-let packages app resolved =
-  [ Semver_image.package id app.requirements resolved.compiler ]
-
-let metadata _ _ = []
-
-let plan app resolved =
   let open Build_plan in
+  let* runtime = image Pins.debian in
   let* env =
     environment
       [
@@ -149,19 +112,32 @@ let plan app resolved =
   in
   let* builder =
     stage
-      (Image (Semver_image.image resolved.compiler))
+      (Image (Semver_image.image compiler))
       ([ Workdir "/app"; Env env; Source.copy ~exclude [ "." ] "/app/" ]
-      @ app.install_commands [ Run app.install ]
-      @ app.build)
+      @ Request.install_commands request [ Run install ]
+      @ Request.build_command request (frontend @ [ Run build ]))
   in
-  stage (Image resolved.runtime)
-    [
-      Workdir "/app";
-      copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
-      copy builder
-        [ "/etc/ssl/certs/ca-certificates.crt" ]
-        "/etc/ssl/certs/ca-certificates.crt";
-      User (1000, 1000);
-      Entrypoint None;
-      Start app.start;
-    ]
+  let+ plan =
+    stage (Image runtime)
+      [
+        Workdir "/app";
+        copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
+        copy builder
+          [ "/etc/ssl/certs/ca-certificates.crt" ]
+          "/etc/ssl/certs/ca-certificates.crt";
+        User (1000, 1000);
+        Entrypoint None;
+        Start start;
+      ]
+  in
+  {
+    Provider.plan;
+    packages = [ Semver_image.package id requirements compiler ];
+    metadata = [];
+    resolution =
+      `Assoc
+        [
+          ("compiler", Semver_image.encode compiler);
+          ("runtime", `String (image_ref runtime));
+        ];
+  }

@@ -1,5 +1,5 @@
 module Planner = Kiln_planning.Planner
-module Error = Kiln_core.Error
+module Error = Kiln_planning.Error
 module Build_plan = Kiln_planning.Build_plan
 module Provider = Kiln_planning.Provider
 module Pins = Kiln_providers.Pins
@@ -84,8 +84,8 @@ let () =
         (position "FROM --platform=$BUILDPLATFORM"
         < position {|--cpu=\"$cpu\" --libc=glibc --ignore-scripts|});
       check "the emulated fallback and the source copy follow"
-        (position {|--ignore-scripts|} < position {|"kiln","npm","install"|}
-        && position {|"kiln","npm","install"|} < position {|COPY --exclude|});
+        (position {|--ignore-scripts|} < position {|"npm","install"]|}
+        && position {|"npm","install"]|} < position {|COPY --exclude|});
       check "the plan names the install path"
         (`Assoc (Planner.info plan)
         |> member "metadata" |> member "dependencyInstall"

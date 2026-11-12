@@ -1,5 +1,5 @@
 open Result.Syntax
-module Error = Kiln_core.Error
+module Error = Kiln_planning.Error
 
 type version = int * int * int
 type comparison = Eq | Ne | Lt | Le | Gt | Ge

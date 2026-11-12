@@ -11,9 +11,7 @@ type prepared = {
 
 let prepare { Provider.provider = (module P); detected } (request : Request.t)
     source =
-  let* app = P.load request source in
-  let* resolved = P.resolve app in
-  let* plan = P.plan app resolved in
+  let* output = P.prepare request source in
   let runtime =
     List.map
       (fun vars -> Build_plan.Env vars)
@@ -25,21 +23,23 @@ let prepare { Provider.provider = (module P); detected } (request : Request.t)
            [ request.Request.install_steps; request.Request.build ])
   in
   let* plan =
-    Build_plan.stage (Build_plan.base plan)
-      (Build_plan.operations plan @ runtime)
+    Build_plan.stage
+      (Build_plan.base output.Provider.plan)
+      (Build_plan.operations output.Provider.plan @ runtime)
   in
   if request.Request.error_missing_start && Build_plan.startup plan = None then
-    Error Kiln_core.Error.Missing_start
+    Error Error.Missing_start
   else
     Ok
       {
         plan;
         secrets = request.Request.secrets;
         detected;
-        packages = P.packages app resolved;
-        metadata = P.metadata app resolved;
+        packages = output.Provider.packages;
+        metadata = output.Provider.metadata;
         resolution =
-          `Assoc [ ("provider", `String P.id); ("data", P.encode resolved) ];
+          `Assoc
+            [ ("provider", `String P.id); ("data", output.Provider.resolution) ];
       }
 
 let log level message =
@@ -53,7 +53,7 @@ let log level message =
 let warnings prepared =
   match Build_plan.startup prepared.plan with
   | Some _ -> []
-  | None -> [ Kiln_core.Error.show Kiln_core.Error.Missing_start ]
+  | None -> [ Error.show Error.Missing_start ]
 
 let info prepared =
   [
@@ -72,8 +72,7 @@ let info prepared =
 
 let failure error =
   [
-    ("success", `Bool false);
-    ("logs", `List [ log "error" (Kiln_core.Error.show error) ]);
+    ("success", `Bool false); ("logs", `List [ log "error" (Error.show error) ]);
   ]
 
 let dockerfile prepared =

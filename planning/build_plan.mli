@@ -4,26 +4,25 @@
 
 type argv = private { executable : string; arguments : string list }
 
-val argv : string list -> (argv, Kiln_core.Error.t) result
+val argv : string list -> (argv, Error.t) result
 (** Require a nonempty executable and NUL-free arguments. Empty argument strings
     are preserved. *)
 
 val arguments : argv -> string list
 (** Executable followed by its arguments, in invocation order. *)
 
-val shell : string -> (argv, Kiln_core.Error.t) result
+val shell : string -> (argv, Error.t) result
 (** Run a nonblank script with [/bin/sh -c]; reject embedded NUL bytes. *)
 
 type environment
 
-val environment :
-  (string * string) list -> (environment, Kiln_core.Error.t) result
+val environment : (string * string) list -> (environment, Error.t) result
 (** Require at least one variable, nonempty alphanumeric/underscore names, and
     values without NUL, newline, or carriage return. *)
 
 type image
 
-val image : string -> (image, Kiln_core.Error.t) result
+val image : string -> (image, Error.t) result
 (** Accept a repository pinned to a lowercase, 64-digit SHA-256 digest. *)
 
 val image_ref : image -> string
@@ -57,10 +56,10 @@ type operation =
   | Prepend_path of string
   | Write of { path : string; contents : string; mode : int }
 
-val external_image : string -> (input, Kiln_core.Error.t) result
-val validate_operations : operation list -> (unit, Kiln_core.Error.t) result
+val external_image : string -> (input, Error.t) result
+val validate_operations : operation list -> (unit, Error.t) result
 
-val stage : base -> operation list -> (stage, Kiln_core.Error.t) result
+val stage : base -> operation list -> (stage, Error.t) result
 (** Validate paths, exclusions, and nonnegative user IDs before admitting
     operations to the graph. References name already constructed stages. *)
 
@@ -84,7 +83,7 @@ val dockerfile : ?secrets:Environment.Names.t -> t -> string
     arrays. Mount each supplied secret as a required environment variable on RUN
     operations; values are never written into the Dockerfile. *)
 
-val run : string list -> (operation, Kiln_core.Error.t) result
+val run : string list -> (operation, Error.t) result
 (** Construct a RUN operation after validating its argv. *)
 
 val context : ?exclude:string list -> string list -> string -> operation

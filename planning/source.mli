@@ -7,24 +7,22 @@
 type t = {
   files : string list;
   links : bool;
-  read : string -> (string, Kiln_core.Error.t) result;
-  resolve_reference :
-    from:string -> string -> (string, Kiln_core.Error.t) result;
+  read : string -> (string, Error.t) result;
+  resolve_reference : from:string -> string -> (string, Error.t) result;
 }
 
 val has : t -> string -> bool
 (** Whether a source-relative filename is in the snapshot. *)
 
-val check_reference :
-  t -> from:string -> string -> (unit, Kiln_core.Error.t) result
+val check_reference : t -> from:string -> string -> (unit, Error.t) result
 (** Require a contained dependency target without retaining its canonical path.
 *)
 
-val version : t -> string -> (string option, Kiln_core.Error.t) result
+val version : t -> string -> (string option, Error.t) result
 (** Read an optional version file, removing comments and surrounding whitespace.
     Reject an empty present file. *)
 
-val workspace : string list -> (unit, Kiln_core.Error.t) result
+val workspace : string list -> (unit, Error.t) result
 (** Reject absolute workspace patterns and parent-directory components,
     including negated patterns. *)
 

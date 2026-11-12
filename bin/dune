@@ -2,7 +2,7 @@
  (name main)
  (public_name kiln)
  (package kiln_ocaml)
- (libraries kiln_io kiln_core yojson unix cmdliner))
+ (libraries kiln_io kiln_planning yojson unix cmdliner))
 
 (env
  (static

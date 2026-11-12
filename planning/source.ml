@@ -3,9 +3,8 @@ open Result.Syntax
 type t = {
   files : string list;
   links : bool;
-  read : string -> (string, Kiln_core.Error.t) result;
-  resolve_reference :
-    from:string -> string -> (string, Kiln_core.Error.t) result;
+  read : string -> (string, Error.t) result;
+  resolve_reference : from:string -> string -> (string, Error.t) result;
 }
 
 let check_reference source ~from reference =
@@ -42,8 +41,7 @@ let version source path =
               (String.take_first_while (( <> ) '#'))
               (String.split_on_char '\n' bytes)))
     in
-    if value = "" then
-      Error (Kiln_core.Error.Metadata (path, "must not be empty"))
+    if value = "" then Error (Error.Metadata (path, "must not be empty"))
     else Ok (Some value)
 
 let workspace patterns =
@@ -56,4 +54,4 @@ let workspace patterns =
       patterns
   with
   | None -> Ok ()
-  | Some pattern -> Error (Kiln_core.Error.Workspace_escape pattern)
+  | Some pattern -> Error (Error.Workspace_escape pattern)
