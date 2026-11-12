@@ -1,12 +1,12 @@
 (** JSON boundary decoders. Malformed values become field-labelled metadata
     errors rather than exceptions. *)
 
-type 'a decoder = string -> Yojson.Basic.t -> ('a, Kiln_core.Error.t) result
+type 'a decoder = string -> Yojson.Basic.t -> ('a, Error.t) result
 
-val metadata : string -> string -> ('a, Kiln_core.Error.t) result
+val metadata : string -> string -> ('a, Error.t) result
 (** Construct a metadata error for a field and diagnostic. *)
 
-val decode : string -> 'a decoder -> string -> ('a, Kiln_core.Error.t) result
+val decode : string -> 'a decoder -> string -> ('a, Error.t) result
 (** Parse JSON text, then run the supplied decoder with the given field label.
 *)
 
@@ -28,17 +28,14 @@ val optional : 'a decoder -> 'a option decoder
 val default : 'a -> 'a decoder -> 'a decoder
 (** Use the fallback only for JSON null, not malformed values. *)
 
-val text : (string -> ('a, Kiln_core.Error.t) result) -> 'a decoder
+val text : (string -> ('a, Error.t) result) -> 'a decoder
 (** Decode a JSON string before applying a domain parser. *)
 
 val member : string -> (string * Yojson.Basic.t) list -> Yojson.Basic.t
 (** Look up the first matching field, returning JSON null when absent. *)
 
 val field :
-  string ->
-  'a decoder ->
-  (string * Yojson.Basic.t) list ->
-  ('a, Kiln_core.Error.t) result
+  string -> 'a decoder -> (string * Yojson.Basic.t) list -> ('a, Error.t) result
 (** Decode a named field; missing fields reach the decoder as JSON null. *)
 
 val assoc : 'a decoder -> (string * 'a) list decoder

@@ -1,4 +1,4 @@
-module Error = Kiln_core.Error
+module Error = Kiln_planning.Error
 
 let check label condition = if not condition then failwith label
 
@@ -41,11 +41,11 @@ let write root path bytes =
   Out_channel.with_open_bin (Filename.concat root path) (fun channel ->
       Out_channel.output_string channel bytes)
 
-let request root extras =
-  Yojson.Basic.to_string (`Assoc (("source", `String root) :: extras))
+let fields root extras = ("source", `String root) :: extras
+let request root extras = Yojson.Basic.to_string (`Assoc (fields root extras))
 
-let prepare ?providers root fields =
-  Kiln_io.Driver.prepare ?providers (request root fields)
+let prepare ?providers root extras =
+  Kiln_io.Driver.prepare ?providers (fields root extras)
 
 let package prepared name =
   Yojson.Basic.Util.(

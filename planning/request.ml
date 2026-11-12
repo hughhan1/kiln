@@ -41,7 +41,7 @@ let native_start label value =
   let* values = Json.list Json.string label value in
   Result.map_error
     (fun _ ->
-      Kiln_core.Error.Metadata
+      Error.Metadata
         (label, "expected nonempty executable-and-arguments without NUL"))
     (Build_plan.argv values)
 
@@ -222,10 +222,12 @@ let configure request source =
 
 let defaults request name declarations =
   match version request name with
-  | Some value ->
+  | Some version ->
       [
-        Package.require
-          ("RAILPACK_" ^ String.uppercase_ascii name ^ "_VERSION")
-          value;
+        {
+          Package.source =
+            "RAILPACK_" ^ String.uppercase_ascii name ^ "_VERSION";
+          version;
+        };
       ]
   | None -> declarations

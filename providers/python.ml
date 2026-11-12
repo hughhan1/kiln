@@ -41,15 +41,13 @@ let detect source =
      else if Source.has source "main.py" then Provider.Fallback
      else Provider.No_match)
 
-type uv = { version : Version.version; image : Build_plan.image }
-
 type install =
   | Pip_install of {
       requirements : bool;
       project : bool;
       dependencies : string list;
     }
-  | Uv_install of uv
+  | Uv_install of { version : Version.version; image : Build_plan.image }
   | Manager_install of {
       manager : manager;
       version : Version.version;
@@ -82,7 +80,6 @@ type resolution = {
   python : Version.version;
   builder : Build_plan.image;
   runtime : Build_plan.image;
-  installer : install;
 }
 
 let pip_arguments ~requirements ~dependencies =
@@ -194,26 +191,15 @@ let validate_manager_metadata manager root =
         else Ok ()
 
 let lock_references source manager path document =
-  let path_fields = [ "editable"; "directory"; "virtual"; "path" ] in
-  let rec collect key value =
-    match value with
-    | Otoml.TomlTable fields | Otoml.TomlInlineTable fields ->
-        List.concat_map (fun (name, value) -> collect name value) fields
-    | Otoml.TomlTableArray values | Otoml.TomlArray values ->
-        List.concat_map (collect key) values
-    | Otoml.TomlString text when List.mem key path_fields -> [ text ]
-    | Otoml.TomlString text
-      when key = "url"
-           && (String.starts_with ~prefix:"file:" text
-              || String.contains text '/' || String.contains text '$') ->
-        [ text ]
-    | Otoml.TomlString _ | Otoml.TomlInteger _ | Otoml.TomlFloat _
-    | Otoml.TomlBoolean _ | Otoml.TomlOffsetDateTime _
-    | Otoml.TomlLocalDateTime _ | Otoml.TomlLocalDate _ | Otoml.TomlLocalTime _
-      ->
-        []
+  let reference (key, text) =
+    List.mem key [ "editable"; "directory"; "virtual"; "path" ]
+    || key = "url"
+       && (String.starts_with ~prefix:"file:" text
+          || String.contains text '/' || String.contains text '$')
   in
-  let references = collect "" document in
+  let references =
+    List.map snd (List.filter reference (Toml.keyed_strings document))
+  in
   let+ local =
     Support.traverse
       (Python_sources.reference ~project_root:(manager = Pdm) source ~from:path)
@@ -519,30 +505,7 @@ let resolve app =
   in
   let* builder = Build_plan.image toolchain.Pins.builder in
   let+ runtime = Build_plan.image toolchain.Pins.runtime in
-  { python; builder; runtime; installer = app.install }
-
-let encode resolved =
-  `Assoc
-    [
-      ("python", `String (Version.show resolved.python));
-      ("builder", `String (Build_plan.image_ref resolved.builder));
-      ("runtime", `String (Build_plan.image_ref resolved.runtime));
-      ( "installer",
-        `Assoc
-          (match resolved.installer with
-          | Pip_install _ -> [ ("name", `String "pip") ]
-          | Uv_install uv ->
-              [
-                ("name", `String "uv");
-                ("version", `String (Version.show uv.version));
-                ("image", `String (Build_plan.image_ref uv.image));
-              ]
-          | Manager_install { manager; version; _ } ->
-              [
-                ("name", `String (manager_name manager));
-                ("version", `String (Version.show version));
-              ]) );
-    ]
+  { python; builder; runtime }
 
 let manager_setup app resolved manager version checks install =
   let name = manager_name manager in
@@ -557,7 +520,7 @@ let manager_setup app resolved manager version checks install =
             "/opt/kiln-tools/bin/pip";
             "install";
             "--no-cache-dir";
-            (match name with "pdm" -> "pdm[locked]" | _ -> name)
+            (match manager with Pdm -> "pdm[locked]" | Poetry -> name)
             ^ "==" ^ Version.show version;
           ]
       in
@@ -863,29 +826,48 @@ let plan app resolved =
         Start app.start;
       ])
 
-let packages app r =
-  Package.resolve "python" app.python_declarations (Version.show r.python)
-  ::
-  (match r.installer with
-  | Pip_install _ -> []
-  | Uv_install uv ->
-      [ Package.resolve "uv" app.uv_declarations (Version.show uv.version) ]
-  | Manager_install { manager; version; _ } ->
+let prepare request source =
+  let* app = load request source in
+  let* r = resolve app in
+  let+ plan = plan app r in
+  let installer, packages, installer_fields =
+    match app.install with
+    | Pip_install _ -> ("pip", [], [])
+    | Uv_install uv ->
+        ( "uv",
+          [ Package.resolve "uv" app.uv_declarations (Version.show uv.version) ],
+          [
+            ("version", `String (Version.show uv.version));
+            ("image", `String (Build_plan.image_ref uv.image));
+          ] )
+    | Manager_install { manager; version; _ } ->
+        let name = manager_name manager in
+        ( name,
+          [
+            Package.resolve name app.manager_declarations (Version.show version);
+          ],
+          [ ("version", `String (Version.show version)) ] )
+  in
+  {
+    Provider.plan;
+    packages =
+      Package.resolve "python" app.python_declarations (Version.show r.python)
+      :: packages;
+    metadata =
       [
-        Package.resolve (manager_name manager) app.manager_declarations
-          (Version.show version);
-      ])
-
-let metadata app _ =
-  [
-    ( "dependencyInstall",
-      if Option.is_some app.native then
-        "native, emulated if a package has no target wheel"
-      else "emulated" );
-    ("pythonRuntime", "cpython");
-    ( "pythonPackageManager",
-      match app.install with
-      | Pip_install _ -> "pip"
-      | Uv_install _ -> "uv"
-      | Manager_install { manager; _ } -> manager_name manager );
-  ]
+        ( "dependencyInstall",
+          if Option.is_some app.native then
+            "native, emulated if a package has no target wheel"
+          else "emulated" );
+        ("pythonRuntime", "cpython");
+        ("pythonPackageManager", installer);
+      ];
+    resolution =
+      `Assoc
+        [
+          ("python", `String (Version.show r.python));
+          ("builder", `String (Build_plan.image_ref r.builder));
+          ("runtime", `String (Build_plan.image_ref r.runtime));
+          ("installer", `Assoc (("name", `String installer) :: installer_fields));
+        ];
+  }

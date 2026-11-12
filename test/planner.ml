@@ -26,7 +26,7 @@ let () =
             | [] | _ :: _ -> false);
           check "strict mode rejects a missing startup"
             (prepare root [ ("errorMissingStartCommand", `Bool true) ]
-            = Error Kiln_core.Error.Missing_start);
+            = Error Kiln_planning.Error.Missing_start);
           let launched =
             ok
               (prepare root
@@ -45,7 +45,7 @@ let () =
       ("Deno", [ ("deno.json", "{}") ]);
       ("Python", [ ("requirements.txt", "") ]);
     ];
-  snapshot files "application environment and secret contract" (fun root ->
+  snapshot files "environment version overrides a version file" (fun root ->
       write root ".node-version" (last Pins.node).Pins.node.Pins.release;
       let prepared =
         ok
@@ -223,7 +223,7 @@ let () =
       let position line = Option.get (String.find_first ~sub:line recipe) in
       check "inherited install follows earlier commands"
         (position {|RUN ["/bin/sh","-c","echo before"]|}
-        < position {|"kiln","npm","install"]|}));
+        < position {|"npm","install"]|}));
   snapshot files "invalid configuration is rejected" (fun root ->
       let reject config =
         write root "railpack.json" config;
@@ -336,20 +336,18 @@ dependencies = ["idna==3.10"]
   in
   let development = [ ("development", `Bool true) ] in
   List.iter
-    (fun (name, files, source, copies, installed) ->
+    (fun (name, files, source, project) ->
       snapshot files (name ^ " development image leaves source out")
         (fun root ->
           let plain = recipe root [] and image = recipe root development in
-          let count text =
-            String.find_all ~sub:source (fun _ n -> n + 1) text 0
-          in
           check "only the flag excludes source"
-            (count plain = 0 && count image = copies);
-          List.iter
-            (fun marker ->
+            ((not (contains plain source)) && contains image source);
+          Option.iter
+            (fun (marker, in_development) ->
               check "the project is not installed"
-                (contains plain marker && not (contains image marker)))
-            installed))
+                (contains plain marker <> in_development
+                && contains image marker = in_development))
+            project))
     [
       ( "pip",
         [
@@ -358,8 +356,7 @@ dependencies = ["idna==3.10"]
           ("package.json", {|{"scripts":{"build":"vite build"}}|});
         ],
         "--exclude=**/*.py ",
-        3,
-        [ "kiln-project" ] );
+        Some ("--no-deps", false) );
       ( "Poetry",
         [
           ( "pyproject.toml",
@@ -368,13 +365,11 @@ dependencies = ["idna==3.10"]
           ("main.py", "");
         ],
         "--exclude=**/*.py ",
-        2,
-        [ {|"--no-ansi"]|} ] );
+        Some ("--no-root", true) );
       ( "Node",
         [ ("package.json", {|{"main":"[id].js"}|}); ("[id].js", "") ],
         "--exclude=?id?.js ",
-        1,
-        [] );
+        None );
     ];
   snapshot files "development exclusions fit BuildKit's line limit" (fun root ->
       for i = 1 to 2000 do

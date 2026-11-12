@@ -3,7 +3,7 @@
 val check : string -> bool -> unit
 (** Fail with the supplied label when an observable contract is false. *)
 
-val ok : ('a, Kiln_core.Error.t) result -> 'a
+val ok : ('a, Kiln_planning.Error.t) result -> 'a
 (** Unwrap success or fail with the domain diagnostic. *)
 
 val contains : string -> string -> bool
@@ -12,7 +12,7 @@ val contains : string -> string -> bool
 val ordered : string list -> string list -> bool
 (** Whether the first step starting with each prefix occurs in list order. *)
 
-val lists_supported : ('a, Kiln_core.Error.t) result -> string list -> bool
+val lists_supported : ('a, Kiln_planning.Error.t) result -> string list -> bool
 (** Whether a failure names exactly these supported versions. *)
 
 val write : string -> string -> string -> unit
@@ -25,7 +25,7 @@ val prepare :
   ?providers:Kiln_planning.Provider.t list ->
   string ->
   (string * Yojson.Basic.t) list ->
-  (Kiln_planning.Planner.prepared, Kiln_core.Error.t) result
+  (Kiln_planning.Planner.prepared, Kiln_planning.Error.t) result
 (** Prepare a snapshot root with extra request fields. *)
 
 val package : Kiln_planning.Planner.prepared -> string -> Yojson.Basic.t

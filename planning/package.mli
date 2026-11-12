@@ -4,8 +4,6 @@
 type requirement = { version : string; source : string }
 type t
 
-val require : string -> string -> requirement
-
 val optional : string -> string option -> requirement list
 (** Preserve a declaration's text and origin when it is present. *)
 
@@ -15,10 +13,10 @@ val select :
   tool:string ->
   declarations:requirement list ->
   version:('row -> string) ->
-  parse:(string -> ('version, Kiln_core.Error.t) result) ->
+  parse:(string -> ('version, Error.t) result) ->
   accept:('version -> 'row -> bool) ->
   'row list ->
-  ('version * 'row, Kiln_core.Error.t) result
+  ('version * 'row, Error.t) result
 (** The newest accepted row of a table ordered oldest first. Otherwise fail
     naming the declarations and every version the table supports. *)
 

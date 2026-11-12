@@ -35,14 +35,13 @@ let fixture test =
       executable (at "commands/curl")
         {|
 [ "$TEST_FAILURE" != download ] || exit 1
-output= url= format=
+output= url=
 while [ "$#" -gt 0 ]; do
-  case "$1" in -o) output=$2; shift;; -w) format=$2; shift;; https://*) url=$1;; esac
+  case "$1" in -o) output=$2; shift;; https://*) url=$1;; esac
   shift
 done
 case "$url" in
   "https://github.com/$TEST_REPOSITORY/releases/latest")
-    [ "$output" = /dev/null ] && [ "$format" = '%{url_effective}' ]
     printf 'https://github.com/%s/releases/tag/vtest' "$TEST_REPOSITORY";;
   "https://github.com/$TEST_REPOSITORY/releases/download/vtest/"*)
     cp "$ASSETS/${url##*/}" "$output";;

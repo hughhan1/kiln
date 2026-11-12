@@ -1,6 +1,6 @@
 (library
  (name kiln_planning)
- (libraries kiln_core yojson angstrom))
+ (libraries yojson angstrom))
 
 (rule
  (target version.ml)

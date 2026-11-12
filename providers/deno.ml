@@ -21,16 +21,6 @@ let detect source =
      then Provider.Explicit
      else Provider.No_match)
 
-type application = {
-  requirements : Semver_image.requirements;
-  install : Build_plan.argv;
-  install_commands : Build_plan.operation list -> Build_plan.operation list;
-  build : Build_plan.operation list;
-  start : Build_plan.argv option;
-}
-
-type resolution = Semver_image.t
-
 let task label value =
   match value with
   | `String command -> Ok (command <> "")
@@ -99,7 +89,7 @@ let config source path =
   let+ tasks = Json.field "tasks" (Json.default [] (Json.assoc task)) fields in
   (fields, tasks)
 
-let load request source =
+let prepare request source =
   let* path =
     match List.filter (Source.has source) configs with
     | [ path ] -> Ok path
@@ -167,28 +157,13 @@ let load request source =
         Result.map Option.some (Build_plan.argv [ "deno"; "task"; "start" ])
     | None -> Ok None
   in
-  let+ install =
+  let* install =
     Request.install_command request
       ([ "deno"; "install" ] @ if locked then [ "--frozen" ] else [])
   in
-  {
-    requirements;
-    install;
-    install_commands = Request.install_commands request;
-    build =
-      Request.build_command request
-        (if List.assoc_opt "build" tasks = Some true then
-           [ Build_plan.Run build_argv ]
-         else []);
-    start;
-  }
-
-let resolve app =
-  Semver_image.resolve ~tool:"Deno" ~pins:Pins.deno app.requirements
-
-let encode = Semver_image.encode
-
-let plan app resolved =
+  let* resolved =
+    Semver_image.resolve ~tool:"Deno" ~pins:Pins.deno requirements
+  in
   let open Build_plan in
   let* env =
     environment
@@ -209,19 +184,26 @@ let plan app resolved =
          mkdir;
          Source.copy ~exclude [ "." ] "/app/";
        ]
-      @ app.install_commands [ Run app.install ]
-      @ app.build)
+      @ Request.install_commands request [ Run install ]
+      @ Request.build_command request
+          (if List.assoc_opt "build" tasks = Some true then [ Run build_argv ]
+           else []))
   in
-  stage (Image image)
-    [
-      Workdir "/app";
-      Env env;
-      copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
-      copy ~owner:(1000, 1000) builder [ "/deno-dir/" ] "/deno-dir/";
-      User (1000, 1000);
-      Entrypoint None;
-      Start app.start;
-    ]
-
-let packages app r = [ Semver_image.package id app.requirements r ]
-let metadata _ _ = []
+  let+ plan =
+    stage (Image image)
+      [
+        Workdir "/app";
+        Env env;
+        copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
+        copy ~owner:(1000, 1000) builder [ "/deno-dir/" ] "/deno-dir/";
+        User (1000, 1000);
+        Entrypoint None;
+        Start start;
+      ]
+  in
+  {
+    Provider.plan;
+    packages = [ Semver_image.package id requirements resolved ];
+    metadata = [];
+    resolution = Semver_image.encode resolved;
+  }

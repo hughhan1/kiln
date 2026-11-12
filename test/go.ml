@@ -35,11 +35,13 @@ let () =
            (String.split_on_char '\n' dockerfile)
            [
              "FROM --platform=$BUILDPLATFORM docker.io/library/node";
-             "COPY --exclude=.git --exclude=**/.git --exclude=*.go";
              {|RUN ["npm","run","build"]|};
-             "COPY --from=s1 --exclude=**/node_modules";
+             "COPY --from=";
              {|RUN ["/bin/sh","-c","test|};
-           ]));
+           ]);
+      check "the frontend sees no Go files and its output no node_modules"
+        (contains dockerfile "--exclude=*.go"
+        && contains dockerfile {|--exclude=**/node_modules ["/app/","/app/"]|}));
   List.iter
     (fun (label, files) ->
       snapshot files label (fun root ->

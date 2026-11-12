@@ -14,6 +14,3 @@ let rec iter f = function
   | x :: xs ->
       let* _ = f x in
       iter f xs
-
-let inside root path =
-  path = root || String.starts_with ~prefix:(Filename.concat root "") path

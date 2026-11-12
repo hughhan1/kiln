@@ -1,8 +1,8 @@
-type 'a decoder = string -> Yojson.Basic.t -> ('a, Kiln_core.Error.t) result
+type 'a decoder = string -> Yojson.Basic.t -> ('a, Error.t) result
 
 open Result.Syntax
 
-let metadata field message = Error (Kiln_core.Error.Metadata (field, message))
+let metadata field message = Error (Error.Metadata (field, message))
 
 let decode field parse text =
   let* value =

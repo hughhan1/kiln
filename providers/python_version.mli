@@ -4,18 +4,18 @@
 type version
 type requirement
 
-val version : string -> (version, Kiln_core.Error.t) result
+val version : string -> (version, Kiln_planning.Error.t) result
 (** Require three numeric release components. *)
 
 val show : version -> string
 (** Canonical three-component release string. *)
 
-val specifier : string -> (requirement list, Kiln_core.Error.t) result
+val specifier : string -> (requirement list, Kiln_planning.Error.t) result
 (** Parse comma-separated comparisons, equality wildcards, and
     compatible-release constraints; an empty specifier imposes no constraints.
 *)
 
-val version_file : string -> (requirement list, Kiln_core.Error.t) result
+val version_file : string -> (requirement list, Kiln_planning.Error.t) result
 (** Parse a one-, two-, or three-component version-file selector. Partial
     selectors match a release prefix. *)
 

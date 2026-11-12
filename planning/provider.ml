@@ -1,22 +1,20 @@
-module Error = Kiln_core.Error
 open Result.Syntax
 
 type detection = No_match | Fallback | Explicit
 
-module type S = sig
-  type application
-  type resolution
+type output = {
+  plan : Build_plan.t;
+  packages : Package.t list;
+  metadata : (string * string) list;
+  resolution : Yojson.Basic.t;
+}
 
+module type S = sig
   val id : string
   val public_name : string
   val exclude : string list
   val detect : Source.t -> (detection, Error.t) result
-  val load : Request.t -> Source.t -> (application, Error.t) result
-  val resolve : application -> (resolution, Error.t) result
-  val encode : resolution -> Yojson.Basic.t
-  val packages : application -> resolution -> Package.t list
-  val metadata : application -> resolution -> (string * string) list
-  val plan : application -> resolution -> (Build_plan.t, Error.t) result
+  val prepare : Request.t -> Source.t -> (output, Error.t) result
 end
 
 type t = (module S)
@@ -31,18 +29,8 @@ let select providers ~requested source =
       providers
   in
   let strongest matches =
-    let rec partition = function
-      | [] -> ([], [])
-      | ((evidence, _) as candidate) :: rest -> (
-          let explicit, fallback = partition rest in
-          match evidence with
-          | No_match -> (explicit, fallback)
-          | Explicit -> (candidate :: explicit, fallback)
-          | Fallback -> (explicit, candidate :: fallback))
-    in
-    match partition matches with
-    | [], fallback -> fallback
-    | (_ :: _ as explicit), _ -> explicit
+    let only evidence = List.filter (fun (e, _) -> e = evidence) matches in
+    match only Explicit with [] -> only Fallback | explicit -> explicit
   in
   let detected =
     List.map (fun (_, (module P : S)) -> P.public_name) (strongest matches)

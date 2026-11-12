@@ -211,9 +211,11 @@ let () =
              "FROM --platform=$BUILDPLATFORM docker.io/library/node";
              {|COPY ["package.json","./"]|};
              {|RUN ["npm","install"]|};
-             "COPY --exclude=.git --exclude=**/.git --exclude=requirements.txt";
+             "COPY --exclude=";
              {|RUN ["npm","run","build"]|};
            ]);
+      check "Python's manifests stay out of the frontend"
+        (contains dockerfile "--exclude=requirements.txt");
       check "node_modules stays out of the image"
         (contains dockerfile {|--exclude=**/node_modules ["/app/","/app/"]|}));
   frontend {|{"devDependencies":{"prettier":"3.0.0"}}|}
@@ -435,7 +437,7 @@ let () =
           let steps = steps prepared in
           check "configured commands take their place" (ordered steps expected);
           check "configuration replaces the install command"
-            (not (List.mem "/bin/sh -c echo ignored" steps));
+            (not (contains (Planner.dockerfile prepared) "echo ignored"));
           check "inheritance selects the dependency layout"
             (List.exists
                (String.starts_with ~prefix:"manifest")
@@ -528,11 +530,11 @@ let () =
         "pdm.lock",
         "2.29.7",
         "pdm[locked]==2.29.7",
-        "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"",
-        "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"" );
+        "\"pdm\",\"install\",\"--prod\",\"--no-editable\"",
+        "\"--check\"" );
     ];
   List.iter
-    (fun (manager, no_root) ->
+    (fun (manager, no_root, lock_check) ->
       snapshot
         [
           ( "pyproject.toml",
@@ -546,11 +548,13 @@ let () =
         (fun root ->
           let dockerfile = Planner.dockerfile (ok (prepare root [])) in
           check "unlocked installs do not request lock checks"
-            ((not (contains dockerfile "--check"))
-            && not (contains dockerfile "check --lock"));
+            (not (contains dockerfile lock_check));
           check "default manager command honors package mode"
             (contains dockerfile no_root)))
-    [ ("poetry", "--no-root"); ("pdm", "--no-self") ];
+    [
+      ("poetry", "--no-root", {|"poetry","check","--lock"|});
+      ("pdm", "--no-self", {|"--check"|});
+    ];
   List.iter
     (fun (manager, version) ->
       snapshot
@@ -623,7 +627,7 @@ let () =
           match prepare root [] with
           | Error error ->
               check "actionable manager error"
-                (contains (Kiln_core.Error.show error) message)
+                (contains (Kiln_planning.Error.show error) message)
           | Ok _ -> check "manager metadata must be rejected" false))
     [
       ( "multiple manager lockfiles",

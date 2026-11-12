@@ -5,7 +5,7 @@ type t
 
 val requirements :
   Kiln_planning.Package.requirement list ->
-  (requirements, Kiln_core.Error.t) result
+  (requirements, Kiln_planning.Error.t) result
 (** Parse and canonicalize the set of declarations before selection. *)
 
 val image : t -> Kiln_planning.Build_plan.image
@@ -13,10 +13,10 @@ val image : t -> Kiln_planning.Build_plan.image
 
 val resolve :
   tool:string ->
-  ?accept:(Kiln_core.Semver.version -> bool) ->
+  ?accept:(Kiln_planning.Semver.version -> bool) ->
   pins:Pins.image list ->
   requirements ->
-  (t, Kiln_core.Error.t) result
+  (t, Kiln_planning.Error.t) result
 (** Select the greatest pin satisfying all requirements and [accept]. *)
 
 val encode : t -> Yojson.Basic.t

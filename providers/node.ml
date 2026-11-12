@@ -5,8 +5,8 @@ module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
 module Support = Kiln_planning.Support
-module Error = Kiln_core.Error
-module Semver = Kiln_core.Semver
+module Error = Kiln_planning.Error
+module Semver = Kiln_planning.Semver
 open Result.Syntax
 
 let parse_version value =
@@ -49,20 +49,6 @@ type resolution = {
   runtime : Build_plan.image;
 }
 
-let encode r =
-  `Assoc
-    [
-      ("nodeVersion", `String (Semver.show r.node));
-      ("packageManager", `String (name r.pm));
-      ("packageManagerVersion", `String (Semver.show r.pm_version));
-      ( "packageManagerInstall",
-        match r.manager_install with
-        | None -> `Null
-        | Some command -> Json.string_array (Build_plan.arguments command) );
-      ("builderImage", `String (Build_plan.image_ref r.builder));
-      ("runtimeImage", `String (Build_plan.image_ref r.runtime));
-    ]
-
 type workspace = Packages_only | With_settings
 
 let workspace bytes =
@@ -86,14 +72,6 @@ let workspace bytes =
   if List.exists (fun key -> key <> "packages") keys then With_settings
   else Packages_only
 
-type snapshot = {
-  files : string list;
-  packages : (string * Javascript.package) list;
-  version_files : Package.requirement list;
-  workspace : workspace option;
-  source_links : bool;
-}
-
 type inputs = Whole_source | Manifests of string list
 
 type application = {
@@ -111,21 +89,19 @@ type application = {
   command : Build_plan.argv option;
 }
 
-let selected_manager pkg (snapshot : snapshot) =
+let selected_manager pkg source workspace =
   match pkg.Javascript.managers with
   | [] ->
       Ok
-        (if
-           List.mem "pnpm-lock.yaml" snapshot.files
-           || Option.is_some snapshot.workspace
-         then Pnpm
+        (if Source.has source "pnpm-lock.yaml" || Option.is_some workspace then
+           Pnpm
          else Npm)
   | first :: rest ->
       if List.for_all (fun d -> d.Javascript.name = first.Javascript.name) rest
       then manager first.Javascript.name
       else Error (Error.Conflict "explicit package managers")
 
-let install_inputs (snapshot : snapshot) =
+let install_inputs source workspace packages =
   let requires_source (_, package) =
     package.Javascript.needs_source
     || List.exists
@@ -141,15 +117,15 @@ let install_inputs (snapshot : snapshot) =
          ]
   in
   let full =
-    snapshot.source_links
-    || snapshot.workspace = Some With_settings
-    || List.exists requires_source snapshot.packages
+    source.Source.links
+    || workspace = Some With_settings
+    || List.exists requires_source packages
     || List.exists
          (fun path ->
            List.mem (Filename.basename path)
              [ "binding.gyp"; ".npmrc"; ".pnpmfile.cjs"; "pnpmfile.cjs" ]
            || String.starts_with ~prefix:"patches/" path)
-         snapshot.files
+         source.Source.files
   in
   if full then Whole_source
   else
@@ -164,7 +140,7 @@ let install_inputs (snapshot : snapshot) =
                "pnpm-lock.yaml";
                "pnpm-workspace.yaml";
              ])
-         snapshot.files)
+         source.Source.files)
 
 let exclusion_character = function
   | ( 'a' .. 'z'
@@ -175,8 +151,22 @@ let exclusion_character = function
       c
   | _ -> '?'
 
-let interpret (request : Request.t) (snapshot : snapshot) =
-  let packages = snapshot.packages in
+let load (request : Request.t) source =
+  let* packages = Javascript.load source in
+  let* versions =
+    Support.traverse
+      (fun path ->
+        let+ version = Source.version source path in
+        Package.optional path version)
+      [ ".node-version"; ".nvmrc" ]
+  in
+  let* workspace =
+    if Source.has source "pnpm-workspace.yaml" then
+      let* bytes = source.Source.read "pnpm-workspace.yaml" in
+      let+ workspace = workspace bytes in
+      Some workspace
+    else Ok None
+  in
   let* pkg =
     match List.assoc_opt "package.json" packages with
     | Some p -> Ok p
@@ -190,14 +180,14 @@ let interpret (request : Request.t) (snapshot : snapshot) =
   in
   let node_declarations =
     Request.defaults request "node"
-      (snapshot.version_files
+      (List.concat versions
       @ Package.optional "package.json engines.node"
           (List.assoc_opt "node" pkg.Javascript.engines)
       @ Javascript.requests ~path:"package.json" pkg.Javascript.runtimes)
   in
   let nodes_text = Package.versions node_declarations in
   let* nodes = Support.traverse node_request nodes_text in
-  let* pm = selected_manager pkg snapshot in
+  let* pm = selected_manager pkg source workspace in
   let manager_declarations =
     Request.defaults request (name pm)
       (Javascript.requests ~path:"package.json" pkg.Javascript.managers)
@@ -212,14 +202,14 @@ let interpret (request : Request.t) (snapshot : snapshot) =
   in
   let inputs =
     if Request.replaces_install request then Whole_source
-    else install_inputs snapshot
+    else install_inputs source workspace packages
   in
   let+ install =
     Request.install_command request
       ([ name pm; "install" ]
       @
       match pm with
-      | Pnpm when List.mem "pnpm-lock.yaml" snapshot.files ->
+      | Pnpm when Source.has source "pnpm-lock.yaml" ->
           [ "--frozen-lockfile"; "--prefer-offline" ]
       | Npm | Pnpm -> [])
   in
@@ -239,7 +229,7 @@ let interpret (request : Request.t) (snapshot : snapshot) =
          else []);
     overlaid =
       (if request.Request.development then
-         List.map (String.map exclusion_character) snapshot.files
+         List.map (String.map exclusion_character) source.Source.files
        else []);
     command;
   }
@@ -283,7 +273,12 @@ let select_manager app node =
         Package.select ~tool:(name app.manager)
           ~declarations:
             (app.manager_declarations
-            @ [ Package.require "Node" ("Node " ^ Semver.show node) ])
+            @ [
+                {
+                  Package.source = "Node";
+                  version = "Node " ^ Semver.show node;
+                };
+              ])
           ~version:fst ~parse:parse_version
           ~accept:(fun version (_, engines) ->
             allowed version && Semver.matches engines node)
@@ -469,48 +464,46 @@ let detect source =
     then Provider.Explicit
     else Provider.Fallback
 
-let load request source =
-  let* packages = Javascript.load source in
-  let* versions =
-    Support.traverse
-      (fun path ->
-        let+ version = Source.version source path in
-        Package.optional path version)
-      [ ".node-version"; ".nvmrc" ]
-  in
-  let* workspace =
-    if Source.has source "pnpm-workspace.yaml" then
-      let* bytes = source.Source.read "pnpm-workspace.yaml" in
-      let+ workspace = workspace bytes in
-      Some workspace
-    else Ok None
-  in
-  interpret request
-    {
-      files = source.Source.files;
-      packages;
-      version_files = List.concat versions;
-      workspace;
-      source_links = source.Source.links;
-    }
-
-let packages app r =
-  [
-    Package.resolve "node" app.node_declarations (Semver.show r.node);
-    Package.resolve
-      ~default_source:
-        (match r.pm with Npm -> "bundled with Node" | Pnpm -> "kiln default")
-      (name r.pm) app.manager_declarations (Semver.show r.pm_version);
-  ]
-
-let metadata app r =
-  [
-    ( "dependencyInstall",
-      if native app r then "native, emulated if a package has an install script"
-      else "emulated" );
-    ("nodeRuntime", "node");
-    ("nodePackageManager", name app.manager);
-  ]
+let prepare request source =
+  let* app = load request source in
+  let* r = resolve app in
+  let+ plan = plan app r in
+  {
+    Provider.plan;
+    packages =
+      [
+        Package.resolve "node" app.node_declarations (Semver.show r.node);
+        Package.resolve
+          ~default_source:
+            (match r.pm with
+            | Npm -> "bundled with Node"
+            | Pnpm -> "kiln default")
+          (name r.pm) app.manager_declarations (Semver.show r.pm_version);
+      ];
+    metadata =
+      [
+        ( "dependencyInstall",
+          if native app r then
+            "native, emulated if a package has an install script"
+          else "emulated" );
+        ("nodeRuntime", "node");
+        ("nodePackageManager", name app.manager);
+      ];
+    resolution =
+      `Assoc
+        [
+          ("nodeVersion", `String (Semver.show r.node));
+          ("packageManager", `String (name r.pm));
+          ("packageManagerVersion", `String (Semver.show r.pm_version));
+          ( "packageManagerInstall",
+            match r.manager_install with
+            | None -> `Null
+            | Some command -> Json.string_array (Build_plan.arguments command)
+          );
+          ("builderImage", `String (Build_plan.image_ref r.builder));
+          ("runtimeImage", `String (Build_plan.image_ref r.runtime));
+        ];
+  }
 
 let frontend ~exclude source =
   if not (Source.has source "package.json") then Ok []

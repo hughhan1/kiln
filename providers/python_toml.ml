@@ -1,5 +1,5 @@
 open Result.Syntax
-module Error = Kiln_core.Error
+module Error = Kiln_planning.Error
 
 let read source path =
   let* bytes = source.Kiln_planning.Source.read path in
@@ -30,3 +30,16 @@ let table document path decode =
 let read_optional source path =
   if Kiln_planning.Source.has source path then read source path
   else Ok (Otoml.TomlTable [])
+
+let rec keyed key = function
+  | Otoml.TomlTable fields | Otoml.TomlInlineTable fields ->
+      List.concat_map (fun (name, value) -> keyed name value) fields
+  | Otoml.TomlTableArray values | Otoml.TomlArray values ->
+      List.concat_map (keyed key) values
+  | Otoml.TomlString text -> [ (key, text) ]
+  | Otoml.TomlInteger _ | Otoml.TomlFloat _ | Otoml.TomlBoolean _
+  | Otoml.TomlOffsetDateTime _ | Otoml.TomlLocalDateTime _
+  | Otoml.TomlLocalDate _ | Otoml.TomlLocalTime _ ->
+      []
+
+let keyed_strings document = keyed "" document

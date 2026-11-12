@@ -4,7 +4,7 @@ module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
 module Support = Kiln_planning.Support
-module Error = Kiln_core.Error
+module Error = Kiln_planning.Error
 open Result.Syntax
 
 let filesystem action =
@@ -19,7 +19,7 @@ let read path = In_channel.with_open_bin path In_channel.input_all
 let check cancelled = if cancelled () then Error Error.Cancelled else Ok ()
 
 let contained exclude root path =
-  Support.inside root path
+  (path = root || String.starts_with ~prefix:(Filename.concat root "") path)
   && not
        (List.exists
           (fun part -> List.mem part exclude)
@@ -78,46 +78,37 @@ let source cancelled root exclude files links =
             resolve path));
   }
 
-let prepare_request ~providers ~cancelled (request : Request.t) =
-  let prepare () =
-    let* () = check cancelled in
-    if
-      Filename.is_relative request.Request.source
-      || not (Sys.is_directory request.Request.source)
-    then
-      Error (Error.Filesystem "source must be an existing absolute directory")
-    else
-      let root = Unix.realpath request.Request.source in
-      let files =
-        Array.to_list (Sys.readdir root) |> List.sort String.compare
-      in
-      let config = request.Request.config_file in
-      let files =
-        if Sys.file_exists (Filename.concat root config) then config :: files
-        else files
-      in
-      let probe = source cancelled root [ ".git" ] files false in
-      let* request = Request.configure request probe in
-      let* selection =
-        Provider.select providers ~requested:request.Request.provider probe
-      in
-      let (module P) = selection.Provider.provider in
-      let exclude = ".git" :: P.exclude in
-      let* files, links = walk cancelled exclude root "" in
-      let source = source cancelled root exclude files links in
-      let* prepared = Planner.prepare selection request source in
-      let+ () = check cancelled in
-      prepared
-  in
-  filesystem prepare
-
 let prepare ?(providers = Kiln_providers.Builtin.all)
-    ?(cancelled = fun () -> false) bytes =
-  let* () = check cancelled in
-  let* fields = Json.decode "request" Json.object_ bytes in
+    ?(cancelled = fun () -> false) fields =
   let* request = Request.decode fields in
-  prepare_request ~providers ~cancelled request
+  filesystem @@ fun () ->
+  let* () = check cancelled in
+  if
+    Filename.is_relative request.Request.source
+    || not (Sys.is_directory request.Request.source)
+  then Error (Error.Filesystem "source must be an existing absolute directory")
+  else
+    let root = Unix.realpath request.Request.source in
+    let files = Array.to_list (Sys.readdir root) |> List.sort String.compare in
+    let config = request.Request.config_file in
+    let files =
+      if Sys.file_exists (Filename.concat root config) then config :: files
+      else files
+    in
+    let probe = source cancelled root [ ".git" ] files false in
+    let* request = Request.configure request probe in
+    let* selection =
+      Provider.select providers ~requested:request.Request.provider probe
+    in
+    let (module P) = selection.Provider.provider in
+    let exclude = ".git" :: P.exclude in
+    let* files, links = walk cancelled exclude root "" in
+    let source = source cancelled root exclude files links in
+    let* prepared = Planner.prepare selection request source in
+    let+ () = check cancelled in
+    prepared
 
 let plan ?providers ?cancelled bytes =
-  let+ prepared = prepare ?providers ?cancelled bytes in
+  let* fields = Json.decode "request" Json.object_ bytes in
+  let+ prepared = prepare ?providers ?cancelled fields in
   Planner.encode prepared

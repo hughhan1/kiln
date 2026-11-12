@@ -42,7 +42,7 @@ let words text =
     many1 (single <|> double <|> escaped <|> bare) >>| String.concat ""
   in
   Result.map_error
-    (fun message -> Kiln_core.Error.Metadata ("command", message))
+    (fun message -> Error.Metadata ("command", message))
     (parse_string ~consume:Consume.All
        (skip_while whitespace *> many (word <* skip_while whitespace))
        text)
@@ -50,7 +50,7 @@ let words text =
 let write ~assets ~mode path name =
   let+ contents =
     Option.to_result
-      ~none:(Kiln_core.Error.Metadata ("asset", "not found: " ^ name))
+      ~none:(Error.Metadata ("asset", "not found: " ^ name))
       (List.assoc_opt name assets)
   in
   Operation (Build_plan.Write { path; contents; mode })

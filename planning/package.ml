@@ -4,10 +4,8 @@ type requirement = { version : string; source : string }
 type origin = Default of string | Declared of requirement * requirement list
 type t = { name : string; resolved : string; origin : origin }
 
-let require source version = { source; version }
-
 let optional source version =
-  Option.to_list (Option.map (require source) version)
+  Option.to_list (Option.map (fun version -> { source; version }) version)
 
 let versions requirements = List.map (fun r -> r.version) requirements
 
@@ -22,7 +20,7 @@ let select ~tool ~declarations ~version ~parse ~accept rows =
   List.find_opt (fun (parsed, row) -> accept parsed row) (List.rev candidates)
   |> Option.to_result
        ~none:
-         (Kiln_core.Error.No_version
+         (Error.No_version
             {
               tool;
               requirements = String.concat " && " (versions declarations);

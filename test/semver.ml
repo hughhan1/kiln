@@ -1,7 +1,7 @@
 (* Compatibility fixtures in node-semver.json come from npm/node-semver v7.7.2:
    https://github.com/npm/node-semver/tree/v7.7.2
    License retained in test/node-semver.LICENSE. *)
-module Semver = Kiln_core.Semver
+module Semver = Kiln_planning.Semver
 open Contract_support
 
 let semver_cases () =
