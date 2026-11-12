@@ -45,7 +45,7 @@ let () =
       ("Deno", [ ("deno.json", "{}") ]);
       ("Python", [ ("requirements.txt", "") ]);
     ];
-  snapshot files "application environment and secret contract" (fun root ->
+  snapshot files "environment version overrides a version file" (fun root ->
       write root ".node-version" (last Pins.node).Pins.node.Pins.release;
       let prepared =
         ok

@@ -2,8 +2,6 @@ let fail ?(code = 1) message =
   prerr_endline message;
   exit code
 
-(* Resolve existing paths and normalize missing components, so two spellings of
-   one output file compare equal. *)
 let rec absolute path =
   if Sys.file_exists path then Unix.realpath path
   else

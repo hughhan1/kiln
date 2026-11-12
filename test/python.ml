@@ -530,8 +530,8 @@ let () =
         "pdm.lock",
         "2.29.7",
         "pdm[locked]==2.29.7",
-        "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"",
-        "\"pdm\",\"install\",\"--prod\",\"--no-editable\",\"--check\"" );
+        "\"pdm\",\"install\",\"--prod\",\"--no-editable\"",
+        "\"--check\"" );
     ];
   List.iter
     (fun (manager, no_root, lock_check) ->

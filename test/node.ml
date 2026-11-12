@@ -163,7 +163,7 @@ let () =
       ("{broken", "package.json");
     ];
   (* Source filtering and containment. *)
-  snapshot "development exclusions" (fun root ->
+  snapshot ".git and node_modules stay out of planning" (fun root ->
       let initial = result root [] in
       List.iter
         (fun dir ->
@@ -171,7 +171,7 @@ let () =
           write root (dir ^ "/package.json") "invalid ignored metadata")
         [ ".git"; "node_modules" ];
       let project = result root [] in
-      check "development directories do not change the plan" (project = initial);
+      check "their contents do not change the plan" (project = initial);
       write root "package.json"
         {|{"main":"main.js","dependencies":{"local":"file:node_modules"}}|};
       failure "escapes" (run root []);

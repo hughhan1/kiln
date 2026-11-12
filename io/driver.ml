@@ -18,8 +18,6 @@ let filesystem action =
 let read path = In_channel.with_open_bin path In_channel.input_all
 let check cancelled = if cancelled () then Error Error.Cancelled else Ok ()
 
-(* [root] and [path] are canonical, so a prefix ending at a separator is a
-   directory boundary. *)
 let contained exclude root path =
   (path = root || String.starts_with ~prefix:(Filename.concat root "") path)
   && not

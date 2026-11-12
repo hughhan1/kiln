@@ -41,5 +41,3 @@ val read_optional :
     table. *)
 
 val keyed_strings : Otoml.t -> (string * string) list
-(** Every string at any depth, paired with the key that names it; array elements
-    take their array's key. *)
