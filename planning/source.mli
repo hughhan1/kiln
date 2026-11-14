@@ -30,8 +30,12 @@ val everywhere : string list -> string list
 (** COPY exclusions matching each name at every depth. *)
 
 val copy : exclude:string list -> string list -> string -> Build_plan.operation
-(** Copy snapshot paths while excluding .git and provider exclusions at every
-    depth. *)
+(** Copy snapshot paths while excluding [omitted] and provider exclusions at
+    every depth. *)
+
+val omitted : string list
+(** Directory basenames left out of every snapshot at every depth: version
+    control, and the packages installed for Node.js and Python. *)
 
 val manifests : string list -> Build_plan.operation list
 (** Copy listed snapshot files to their own paths under the working directory,

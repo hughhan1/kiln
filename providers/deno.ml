@@ -10,7 +10,7 @@ open Result.Syntax
 
 let id = "deno"
 let public_name = id
-let exclude = [ "node_modules"; ".deno" ]
+let exclude = [ ".deno" ]
 let configs = [ "deno.json"; "deno.jsonc" ]
 
 let detect source =

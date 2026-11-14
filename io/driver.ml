@@ -101,7 +101,7 @@ let prepare ?(providers = Kiln_providers.Builtin.all)
       Provider.select providers ~requested:request.Request.provider probe
     in
     let (module P) = selection.Provider.provider in
-    let exclude = ".git" :: P.exclude in
+    let exclude = Source.omitted @ P.exclude in
     let* files, links = walk cancelled exclude root "" in
     let source = source cancelled root exclude files links in
     let* prepared = Planner.prepare selection request source in
