@@ -10,6 +10,7 @@ module Error = Kiln_planning.Error
 
 let id = "bun"
 let public_name = "node"
+let includes = []
 let exclude = [ ".bun" ]
 let locks = [ "bun.lock"; "bun.lockb" ]
 
@@ -25,6 +26,9 @@ let detect source =
         (pkg.Javascript.managers @ pkg.Javascript.runtimes)
     then Provider.Explicit
     else Provider.No_match
+
+let develop _ =
+  Error (Kiln_planning.Error.Unsupported ("development with " ^ id))
 
 let prepare request source =
   let* packages = Javascript.load source in

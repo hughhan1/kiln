@@ -9,6 +9,17 @@ type prepared = {
   metadata : (string * string) list;
 }
 
+let develop { Provider.provider = (module P); _ } source =
+  let+ { Provider.install; build } = P.develop source in
+  let commands steps =
+    `List
+      (List.map
+         (fun command -> Json.string_array (Build_plan.arguments command))
+         steps)
+  in
+  Json.encode
+    (`Assoc [ ("install", commands install); ("build", commands build) ])
+
 let prepare { Provider.provider = (module P); detected } (request : Request.t)
     source =
   let* output = P.prepare request source in

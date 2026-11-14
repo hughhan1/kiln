@@ -13,6 +13,7 @@ module Toml = Python_toml
 let id = "python"
 let public_name = id
 let uv_tool_version = "0.13.1"
+let includes = [ "node" ]
 let exclude = [ "__pycache__"; ".pytest_cache"; ".mypy_cache"; ".ruff_cache" ]
 
 let manifests =
@@ -61,7 +62,6 @@ type application = {
   installable : bool;
   start : Build_plan.argv option;
   build : Build_plan.operation list;
-  server : string list;
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   install_override : Build_plan.argv option;
 }
@@ -416,7 +416,6 @@ let load request source =
           ( Uv_install { version; image },
             Option.value ~default:(Option.is_some build_system) uv_package )
   in
-  let installable = installable && not request.Request.development in
   let* workspace =
     Toml.field root [ "tool"; "uv"; "workspace" ] Otoml.get_value
   in
@@ -448,10 +447,7 @@ let load request source =
         (Whole_source | Manifests _) ) ->
         None
   in
-  let server = if request.Request.development then [ "*.py" ] else [] in
-  let* frontend =
-    Node.frontend ~exclude:(server @ manifests @ exclude) source
-  in
+  let* frontend = Node.frontend ~exclude:(manifests @ exclude) source in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
   in
@@ -482,7 +478,6 @@ let load request source =
       install_override = request.Request.install;
       install_commands = Request.install_commands request;
       build = Request.build_command request frontend;
-      server;
     }
 
 let resolve app =
@@ -767,8 +762,7 @@ let plan app resolved =
         in
         let+ build =
           stage (Stage dependencies)
-            (Source.copy ~exclude:(app.server @ exclude) [ "." ] "/app/"
-            :: (finish @ app.build))
+            (Source.copy ~exclude [ "." ] "/app/" :: (finish @ app.build))
         in
         (dependencies, build, finish)
   in
@@ -808,13 +802,19 @@ let plan app resolved =
      ]
     @ project
     @ [
-        copy ~owner:(1000, 1000)
-          ~exclude:(Source.everywhere app.server)
-          build [ "/app/" ] "/app/";
+        copy ~owner:(1000, 1000) build [ "/app/" ] "/app/";
         User (1000, 1000);
         Entrypoint None;
         Start app.start;
       ])
+
+let develop source =
+  if not (Source.has source "uv.lock") then
+    Json.metadata "Python" "development installs with uv; run uv lock"
+  else
+    let* sync = Build_plan.argv [ "uv"; "sync" ] in
+    let+ page = Node.develop source in
+    { page with Provider.install = sync :: page.Provider.install }
 
 let prepare request source =
   let* app = load request source in

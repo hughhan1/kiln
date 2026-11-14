@@ -10,6 +10,7 @@ open Result.Syntax
 
 let id = "go"
 let public_name = id
+let includes = [ "node" ]
 let exclude = []
 
 let detect source =
@@ -43,6 +44,8 @@ let parse_version value =
   Result.map_error
     (fun message -> Error.Metadata ("go.mod", message))
     (Semver.version value)
+
+let develop = Node.develop
 
 let prepare request source =
   let* () =

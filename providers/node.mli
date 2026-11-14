@@ -11,3 +11,9 @@ val frontend :
     provider's build stage; nothing without one. The install, from the manifests
     before the source unless it needs the source, and the build run on the build
     platform. The output omits node_modules. *)
+
+val develop :
+  Kiln_planning.Source.t ->
+  (Kiln_planning.Provider.steps, Kiln_planning.Error.t) result
+(** The root package.json's install, then its [build] script if it has one;
+    nothing without a package.json. *)

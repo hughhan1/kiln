@@ -85,16 +85,17 @@ type application = {
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   inputs : inputs;
   build : Build_plan.operation list;
-  overlaid : string list;
   command : Build_plan.argv option;
 }
 
-let selected_manager pkg source workspace =
+let selected_manager pkg source =
   match pkg.Javascript.managers with
   | [] ->
       Ok
-        (if Source.has source "pnpm-lock.yaml" || Option.is_some workspace then
-           Pnpm
+        (if
+           List.exists (Source.has source)
+             [ "pnpm-lock.yaml"; "pnpm-workspace.yaml" ]
+         then Pnpm
          else Npm)
   | first :: rest ->
       if List.for_all (fun d -> d.Javascript.name = first.Javascript.name) rest
@@ -142,15 +143,6 @@ let install_inputs source workspace packages =
              ])
          source.Source.files)
 
-let exclusion_character = function
-  | ( 'a' .. 'z'
-    | 'A' .. 'Z'
-    | '0' .. '9'
-    | '/' | '.' | '_' | '-'
-    | '\128' .. '\255' ) as c ->
-      c
-  | _ -> '?'
-
 let load (request : Request.t) source =
   let* packages = Javascript.load source in
   let* versions =
@@ -187,7 +179,7 @@ let load (request : Request.t) source =
   in
   let nodes_text = Package.versions node_declarations in
   let* nodes = Support.traverse node_request nodes_text in
-  let* pm = selected_manager pkg source workspace in
+  let* pm = selected_manager pkg source in
   let manager_declarations =
     Request.defaults request (name pm)
       (Javascript.requests ~path:"package.json" pkg.Javascript.managers)
@@ -227,10 +219,6 @@ let load (request : Request.t) source =
       Request.build_command request
         (if Javascript.has_script pkg "build" then [ Build_plan.Run build_argv ]
          else []);
-    overlaid =
-      (if request.Request.development then
-         List.map (String.map exclusion_character) source.Source.files
-       else []);
     command;
   }
 
@@ -333,6 +321,7 @@ let resolve app =
 
 let id = "node"
 let public_name = id
+let includes = []
 let exclude = []
 
 (* npm honours --libc from 10.4. A replaced install command always copies the
@@ -444,7 +433,7 @@ let plan app r =
           ~exclude:[ "*"; "!**/node_modules" ]
           build [ "/app/" ] "/app/";
         copy ~owner:(10001, 10001)
-          ~exclude:("**/node_modules" :: ".kiln-emulate" :: app.overlaid)
+          ~exclude:[ "**/node_modules"; ".kiln-emulate" ]
           build [ "/app/" ] "/app/";
         User (10001, 10001);
         Start app.command;
@@ -504,6 +493,20 @@ let prepare request source =
           ("runtimeImage", `String (Build_plan.image_ref r.runtime));
         ];
   }
+
+let develop source =
+  if not (Source.has source "package.json") then
+    Ok { Provider.install = []; build = [] }
+  else
+    let* pkg = Javascript.root source in
+    let* pm = selected_manager pkg source in
+    let* install = Build_plan.argv [ name pm; "install" ] in
+    let+ build =
+      if Javascript.has_script pkg "build" then
+        Result.map List.singleton (Build_plan.argv [ name pm; "run"; "build" ])
+      else Ok []
+    in
+    { Provider.install = [ install ]; build }
 
 let frontend ~exclude source =
   if not (Source.has source "package.json") then Ok []

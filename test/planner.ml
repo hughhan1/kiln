@@ -82,6 +82,26 @@ let () =
         = `List [ `String "node" ]);
       check "unknown provider rejected"
         (Result.is_error (prepare root [ ("provider", `String "unknown") ])));
+  List.iter
+    (fun (provider, files) ->
+      let page =
+        {|{"packageManager":"pnpm@11.25.0","scripts":{"build":"vite build"}}|}
+      in
+      snapshot (("package.json", page) :: files)
+        (provider ^ " builds a page that declares its package manager")
+        (fun root ->
+          let prepared = ok (prepare root []) in
+          check "the app's own provider plans it"
+            (Yojson.Basic.Util.member "provider" prepared.Planner.resolution
+            = `String provider);
+          check "with the page built"
+            (contains
+               (Planner.dockerfile prepared)
+               {|RUN ["pnpm","run","build"]|})))
+    [
+      ("python", [ ("requirements.txt", ""); ("main.py", "") ]);
+      ("go", [ ("go.mod", "module example\ngo 1.27\n") ]);
+    ];
   snapshot [] "unknown application" (fun root ->
       check "no implicit application fixture"
         (Result.is_error (prepare root [])));
@@ -325,58 +345,63 @@ let () =
       in
       check "custom path used"
         (contains (Build_plan.dockerfile plan.Planner.plan) "echo nested"));
-  let project =
-    {|[project]
-name = "app"
-version = "1"
-dependencies = ["idna==3.10"]
-|}
-  in
-  let development = [ ("development", `Bool true) ] in
-  List.iter
-    (fun (name, files, source, project) ->
-      snapshot files (name ^ " development image leaves source out")
-        (fun root ->
-          let plain = recipe root [] and image = recipe root development in
-          check "only the flag excludes source"
-            ((not (contains plain source)) && contains image source);
-          Option.iter
-            (fun (marker, in_development) ->
-              check "the project is not installed"
-                (contains plain marker <> in_development
-                && contains image marker = in_development))
-            project))
+  let page = {|{"scripts":{"build":"vite build"}}|} in
+  let python =
     [
-      ( "pip",
+      ( "pyproject.toml",
+        "[project]\n\
+         name = \"app\"\n\
+         version = \"1\"\n\
+         requires-python = \">=3.12\"\n" );
+      ("server.py", "");
+    ]
+  in
+  let uv_lock = ("uv.lock", "version = 1\nrequires-python = \">=3.12\"\n") in
+  List.iter
+    (fun (name, files, expected) ->
+      snapshot files ("development steps: " ^ name) (fun root ->
+          let planned =
+            Kiln_io.Driver.plan (request root [ ("development", `Bool true) ])
+          in
+          match (planned, expected) with
+          | Ok response, Some steps ->
+              check "the steps"
+                (Yojson.Basic.from_string response
+                = Yojson.Basic.from_string steps)
+          | Error _, None -> ()
+          | Ok response, None -> failwith ("planned: " ^ response)
+          | Error error, Some _ -> failwith (Kiln_planning.Error.show error)))
+    [
+      ( "pnpm leaves its lockfile unfrozen, for an image Kiln cannot plan",
         [
-          ("pyproject.toml", project);
-          ("main.py", "");
-          ("package.json", {|{"scripts":{"build":"vite build"}}|});
+          ( "package.json",
+            {|{"engines":{"node":">=99"},"scripts":{"build":"vite build"}}|} );
+          ("pnpm-lock.yaml", "");
         ],
-        "--exclude=**/*.py ",
-        Some ("--no-deps", false) );
-      ( "Poetry",
+        Some
+          {|{"install":[["pnpm","install"]],"build":[["pnpm","run","build"]]}|}
+      );
+      ( "uv with a page, whose railpack.json does not apply",
+        uv_lock :: ("package.json", page)
+        :: ( "railpack.json",
+             {|{"steps":{"install":{"commands":["...",{"path":"/opt/node/bin"}]},"build":{"commands":["vite build"]}}}|}
+           )
+        :: python,
+        Some
+          {|{"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]]}|}
+      );
+      ( "uv alone",
+        uv_lock :: python,
+        Some {|{"install":[["uv","sync"]],"build":[]}|} );
+      ("Python without uv.lock", python, None);
+      ( "Go whose package.json declares its package manager and builds nothing",
         [
-          ( "pyproject.toml",
-            project
-            ^ "[build-system]\nbuild-backend = \"poetry.core.masonry.api\"\n" );
-          ("main.py", "");
+          ("go.mod", "module example\ngo 1.27\n");
+          ( "package.json",
+            {|{"packageManager":"pnpm@11.25.0","dependencies":{"holon-sh":"^0.0.1"}}|}
+          );
         ],
-        "--exclude=**/*.py ",
-        Some ("--no-root", true) );
-      ( "Node",
-        [ ("package.json", {|{"main":"[id].js"}|}); ("[id].js", "") ],
-        "--exclude=?id?.js ",
-        None );
+        Some {|{"install":[["pnpm","install"]],"build":[]}|} );
+      ("Bun", [ ("package.json", {|{"packageManager":"bun@1"}|}) ], None);
     ];
-  snapshot files "development exclusions fit BuildKit's line limit" (fun root ->
-      for i = 1 to 2000 do
-        write root
-          (Printf.sprintf "%04d-a-rather-long-source-file-name.js" i)
-          ""
-      done;
-      check "every line fits"
-        (List.for_all
-           (fun line -> String.length line < 65536)
-           (String.split_on_char '\n' (recipe root development))));
   finish ()

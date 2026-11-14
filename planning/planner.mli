@@ -15,6 +15,10 @@ val prepare :
     variables and PATH additions to its final stage. Fail with [Missing_start]
     when the request requires a startup the plan lacks. *)
 
+val develop : Provider.selection -> Source.t -> (string, Error.t) result
+(** The JSON of what a development environment runs in the source: [install],
+    then [build], each an array of argument vectors. *)
+
 val encode : prepared -> string
 (** Serialize the Dockerfile together with preparation metadata. *)
 

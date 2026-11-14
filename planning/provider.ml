@@ -1,6 +1,7 @@
 open Result.Syntax
 
 type detection = No_match | Fallback | Explicit
+type steps = { install : Build_plan.argv list; build : Build_plan.argv list }
 
 type output = {
   plan : Build_plan.t;
@@ -13,8 +14,10 @@ module type S = sig
   val id : string
   val public_name : string
   val exclude : string list
+  val includes : string list
   val detect : Source.t -> (detection, Error.t) result
   val prepare : Request.t -> Source.t -> (output, Error.t) result
+  val develop : Source.t -> (steps, Error.t) result
 end
 
 type t = (module S)
@@ -38,7 +41,15 @@ let select providers ~requested source =
   in
   let candidates =
     match requested with
-    | None -> strongest matches
+    | None ->
+        let strongest = strongest matches in
+        List.filter
+          (fun (_, (module P : S)) ->
+            not
+              (List.exists
+                 (fun (_, (module Q : S)) -> List.mem P.public_name Q.includes)
+                 strongest))
+          strongest
     | Some name -> (
         let candidates =
           List.filter (fun (_, (module P : S)) -> P.public_name = name) matches

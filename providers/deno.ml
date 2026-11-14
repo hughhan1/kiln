@@ -10,6 +10,7 @@ open Result.Syntax
 
 let id = "deno"
 let public_name = id
+let includes = []
 let exclude = [ ".deno" ]
 let configs = [ "deno.json"; "deno.jsonc" ]
 
@@ -88,6 +89,9 @@ let config source path =
   in
   let+ tasks = Json.field "tasks" (Json.default [] (Json.assoc task)) fields in
   (fields, tasks)
+
+let develop _ =
+  Error (Kiln_planning.Error.Unsupported ("development with " ^ id))
 
 let prepare request source =
   let* path =
