@@ -82,6 +82,26 @@ let () =
         = `List [ `String "node" ]);
       check "unknown provider rejected"
         (Result.is_error (prepare root [ ("provider", `String "unknown") ])));
+  List.iter
+    (fun (provider, files) ->
+      let page =
+        {|{"packageManager":"pnpm@11.25.0","scripts":{"build":"vite build"}}|}
+      in
+      snapshot (("package.json", page) :: files)
+        (provider ^ " builds a page that declares its package manager")
+        (fun root ->
+          let prepared = ok (prepare root []) in
+          check "the app's own provider plans it"
+            (Yojson.Basic.Util.member "provider" prepared.Planner.resolution
+            = `String provider);
+          check "with the page built"
+            (contains
+               (Planner.dockerfile prepared)
+               {|RUN ["pnpm","run","build"]|})))
+    [
+      ("python", [ ("requirements.txt", ""); ("main.py", "") ]);
+      ("go", [ ("go.mod", "module example\ngo 1.27\n") ]);
+    ];
   snapshot [] "unknown application" (fun root ->
       check "no implicit application fixture"
         (Result.is_error (prepare root [])));
@@ -374,12 +394,14 @@ let () =
         uv_lock :: python,
         Some {|{"install":[["uv","sync"]],"build":[]}|} );
       ("Python without uv.lock", python, None);
-      ( "Go whose package.json builds nothing",
+      ( "Go whose package.json declares its package manager and builds nothing",
         [
           ("go.mod", "module example\ngo 1.27\n");
-          ("package.json", {|{"dependencies":{"holon-sh":"^0.0.1"}}|});
+          ( "package.json",
+            {|{"packageManager":"pnpm@11.25.0","dependencies":{"holon-sh":"^0.0.1"}}|}
+          );
         ],
-        Some {|{"install":[["npm","install"]],"build":[]}|} );
+        Some {|{"install":[["pnpm","install"]],"build":[]}|} );
       ("Bun", [ ("package.json", {|{"packageManager":"bun@1"}|}) ], None);
     ];
   finish ()

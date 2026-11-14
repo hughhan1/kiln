@@ -321,6 +321,7 @@ let resolve app =
 
 let id = "node"
 let public_name = id
+let includes = []
 let exclude = []
 
 (* npm honours --libc from 10.4. A replaced install command always copies the

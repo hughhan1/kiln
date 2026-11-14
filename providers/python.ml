@@ -13,6 +13,7 @@ module Toml = Python_toml
 let id = "python"
 let public_name = id
 let uv_tool_version = "0.13.1"
+let includes = [ "node" ]
 let exclude = [ "__pycache__"; ".pytest_cache"; ".mypy_cache"; ".ruff_cache" ]
 
 let manifests =
