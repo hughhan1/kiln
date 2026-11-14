@@ -58,6 +58,59 @@ let configured_commands source =
     }|};
   container ~rejected:false source (plan source)
 
+let run_command root source =
+  let tooling = Filename.concat root "tooling" in
+  let generated = Filename.concat root "generated" in
+  let output = Filename.concat root "output" in
+  List.iter (fun directory -> Unix.mkdir directory 0o700) [ tooling; generated ];
+  write tooling "message" "mounted";
+  write generated "overlay.txt" "overlaid";
+  let dockerfile = Filename.concat root "run.Dockerfile" in
+  let request =
+    `Assoc
+      [
+        ( "command",
+          `List
+            (List.map
+               (fun argument -> `String argument)
+               [
+                 "python";
+                 "-c";
+                 "import pathlib, sys, six; \
+                  print(pathlib.Path('/tooling/message').read_text(), \
+                  pathlib.Path('overlay.txt').read_text(), six.__name__); \
+                  sys.exit(3)";
+               ]) );
+        ("mounts", `Assoc [ ("tooling", `String "/tooling") ]);
+        ("overlay", `String "generated");
+        ("packages", `List [ `String "six==1.16.0" ]);
+      ]
+  in
+  Out_channel.with_open_bin dockerfile (fun channel ->
+      Out_channel.output_string channel
+        (Kiln_planning.Build_plan.dockerfile
+           (ok (prepare source [ ("run", request) ]))));
+  ignore
+    (run "docker"
+       [
+         "buildx";
+         "build";
+         "--build-context";
+         "tooling=" ^ tooling;
+         "--build-context";
+         "generated=" ^ generated;
+         "--output";
+         "type=local,dest=" ^ output;
+         "-f";
+         dockerfile;
+         source;
+       ]);
+  let exported name =
+    In_channel.with_open_bin (Filename.concat output name) In_channel.input_all
+  in
+  check "the command's output and failing status are exported"
+    (exported "stdout" = "mounted overlaid six\n" && exported "status" = "3\n")
+
 let exercise name =
   snapshot [] name (fun root ->
       let original = "test/apps/" ^ name in
@@ -69,7 +122,8 @@ let exercise name =
       if Sys.file_exists rejected then (
         copy rejected source;
         container ~rejected:true source plan);
-      if name = "node-npm" then configured_commands source)
+      if name = "node-npm" then configured_commands source;
+      if name = "python-pip" then run_command root source)
 
 let () =
   List.iter exercise (entries "test/apps");

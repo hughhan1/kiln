@@ -56,7 +56,7 @@ let image value =
 let image_ref image = image
 
 type stage = { base : base; operations : operation list }
-and base = Image of image | Native of image | Stage of stage
+and base = Image of image | Native of image | Stage of stage | Scratch
 and input = Context | Output of stage | External of image_reference
 and image_reference = string
 
@@ -75,6 +75,7 @@ and operation =
   | Entrypoint
   | Start of argv option
   | Prepend_path of string
+  | Isolated of { command : argv; mounts : (input * string) list }
 
 let validate_operations operations =
   let valid = function
@@ -92,6 +93,16 @@ let validate_operations operations =
         && Option.fold ~none:true ~some:(fun (u, g) -> u >= 0 && g >= 0) owner
     | Workdir path | Prepend_path path -> path <> "" && single_line path
     | User (u, g) -> u >= 0 && g >= 0
+    | Isolated { mounts; _ } ->
+        List.for_all
+          (fun (_, target) ->
+            String.starts_with ~prefix:"/" target
+            && single_line target
+            && not
+                 (String.exists
+                    (function ',' | ' ' -> true | _ -> false)
+                    target))
+          mounts
     | Run _ | Env _ | Entrypoint | Start _ -> true
   in
   if List.for_all valid operations then Ok ()
@@ -112,14 +123,21 @@ let stages root =
     else
       let seen =
         match stage.base with
-        | Image _ | Native _ -> seen
+        | Image _ | Native _ | Scratch -> seen
         | Stage parent -> visit seen parent
+      in
+      let input seen = function
+        | Output stage -> visit seen stage
+        | Context | External _ -> seen
       in
       let seen =
         List.fold_left
           (fun seen -> function
-            | Copy { input = Output stage; _ } -> visit seen stage
-            | Copy { input = Context | External _; _ }
+            | Copy { input = from; _ } -> input seen from
+            | Isolated { mounts; _ } ->
+                List.fold_left
+                  (fun seen (from, _) -> input seen from)
+                  seen mounts
             | Run _ | Workdir _ | Env _ | User _ | Entrypoint | Start _
             | Prepend_path _ ->
                 seen)
@@ -171,6 +189,7 @@ let dockerfile root =
           | Image image -> image_ref image
           | Native image -> "--platform=$BUILDPLATFORM " ^ image_ref image
           | Stage parent -> name parent
+          | Scratch -> "scratch"
         in
         let operations = List.map operation stage.operations in
         let name = "s" ^ string_of_int (List.length !rendered) in
@@ -178,19 +197,34 @@ let dockerfile root =
         Buffer.add_string output ("FROM " ^ base ^ " AS " ^ name ^ "\n");
         (match stage.base with
         | Native _ -> Buffer.add_string output "ARG TARGETARCH\n"
-        | Image _ | Stage _ -> ());
+        | Image _ | Stage _ | Scratch -> ());
         List.iter
           (fun line -> Buffer.add_string output (line ^ "\n"))
           operations;
         name
+  and from = function
+    | Context -> None
+    | Output stage -> Some (name stage)
+    | External reference -> Some reference
   and operation = function
     | Run args -> "RUN " ^ json (arguments args)
+    | Isolated { command; mounts } ->
+        "RUN --network=none "
+        ^ String.concat ""
+            (List.map
+               (fun (input, target) ->
+                 "--mount=type=bind,"
+                 ^ Option.fold ~none:""
+                     ~some:(fun from -> "from=" ^ from ^ ",")
+                     (from input)
+                 ^ "target=" ^ target ^ ",readonly ")
+               mounts)
+        ^ json (arguments command)
     | Copy { input; paths; exclude; destination; owner } ->
         let prefix =
-          match input with
-          | Context -> ""
-          | Output stage -> "--from=" ^ name stage ^ " "
-          | External reference -> "--from=" ^ reference ^ " "
+          Option.fold ~none:""
+            ~some:(fun from -> "--from=" ^ from ^ " ")
+            (from input)
         in
         let owner =
           Option.fold ~none:""

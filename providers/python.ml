@@ -395,7 +395,7 @@ let load request source =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
   in
   let* start =
-    match (request.Request.start, scripts) with
+    match (Request.start request, scripts) with
     | Some argv, _ -> Ok (Some argv)
     | None, [ (name, _) ] when installable ->
         Result.map Option.some (Build_plan.argv [ name ])

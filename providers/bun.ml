@@ -55,7 +55,7 @@ let prepare request source =
   let* requirements = Semver_image.requirements declarations in
   let* build_argv = Build_plan.argv [ "bun"; "run"; "build" ] in
   let* start =
-    Javascript.startup root ~override:request.Request.start
+    Javascript.startup root ~override:(Request.start request)
       ~script:[ "bun"; "run"; "start" ] ~main:[ "bun"; "run" ]
   in
   let* install =
