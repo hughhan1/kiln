@@ -20,8 +20,7 @@ val develop :
 (** The JSON of what a development environment runs for the app: [inputs], the
     source paths its install reads, where ["."] is the whole source; [install]
     and [build], arrays of argument vectors; and [start], one or null. Fail when
-    the provider has no development steps for the app, or they include a PATH,
-    COPY or FILE operation, which only an image runs. *)
+    the provider has no development steps for the app. *)
 
 val encode : prepared -> string
 (** Serialize the Dockerfile together with preparation metadata. *)

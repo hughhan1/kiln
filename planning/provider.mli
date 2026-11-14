@@ -6,13 +6,14 @@ type inputs = Whole_source | Manifests of string list
 
 type steps = {
   inputs : inputs;
-  install : Build_plan.operation list;
-  build : Build_plan.operation list;
+  install : Build_plan.argv list;
+  build : Build_plan.argv list;
   start : Build_plan.argv option;
 }
 (** What a development environment runs in the source directory: [install]
     whenever [inputs], the files it reads or the whole source, change; then
-    [build], then [start]. *)
+    [build], then [start]. The app's build configuration, which configures an
+    image, does not apply. *)
 
 type output = {
   plan : Build_plan.t;

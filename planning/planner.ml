@@ -11,22 +11,12 @@ type prepared = {
 
 let argv command = Json.string_array (Build_plan.arguments command)
 
-let commands =
-  Support.traverse (function
-    | Build_plan.Run command -> Ok (argv command)
-    | Build_plan.(
-        ( Copy _ | Workdir _ | Env _ | User _ | Entrypoint _ | Start _
-        | Prepend_path _ | Write _ )) ->
-        Error (Error.Unsupported "PATH, COPY and FILE commands in development"))
-
 let develop { Provider.provider = (module P); _ } request source =
   let* output = P.prepare request source in
-  let* { Provider.inputs; install; build; start } =
+  let+ { Provider.inputs; install; build; start } =
     Option.value output.Provider.steps
       ~default:(Error (Error.Unsupported ("development with " ^ P.id)))
   in
-  let* install = commands install in
-  let+ build = commands build in
   Json.encode
   @@ `Assoc
        [
@@ -35,8 +25,8 @@ let develop { Provider.provider = (module P); _ } request source =
              (match inputs with
              | Provider.Whole_source -> [ "." ]
              | Provider.Manifests paths -> paths) );
-         ("install", `List install);
-         ("build", `List build);
+         ("install", `List (List.map argv install));
+         ("build", `List (List.map argv build));
          ("start", Option.fold ~none:`Null ~some:argv start);
        ]
 

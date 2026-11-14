@@ -5,8 +5,8 @@ type inputs = Whole_source | Manifests of string list
 
 type steps = {
   inputs : inputs;
-  install : Build_plan.operation list;
-  build : Build_plan.operation list;
+  install : Build_plan.argv list;
+  build : Build_plan.argv list;
   start : Build_plan.argv option;
 }
 

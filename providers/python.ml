@@ -71,7 +71,7 @@ type application = {
   installable : bool;
   start : Build_plan.argv option;
   build : Build_plan.operation list;
-  page : Provider.steps;
+  development : (Provider.steps, Kiln_planning.Error.t) result;
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   install_override : Build_plan.argv option;
 }
@@ -432,15 +432,16 @@ let load request source =
   (* uv builds the root project to read dynamic metadata. *)
   let* dynamic = Toml.field root [ "project"; "dynamic" ] Otoml.get_value in
   let* dynamic_fields = Toml.strings root [ "project"; "dynamic" ] in
+  let read =
+    install_inputs source install ~installable ~requirements:pip_requirements
+      ~project:root_local
+      ~lock:(uv_lock_local || manager_lock_local)
+      ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
+      ~static_dependencies:
+        (Option.is_some name && not (List.mem "dependencies" dynamic_fields))
+  in
   let inputs =
-    if Request.replaces_install request then Whole_source
-    else
-      install_inputs source install ~installable ~requirements:pip_requirements
-        ~project:root_local
-        ~lock:(uv_lock_local || manager_lock_local)
-        ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
-        ~static_dependencies:
-          (Option.is_some name && not (List.mem "dependencies" dynamic_fields))
+    if Request.replaces_install request then Whole_source else read
   in
   (* uv ignores pip's environment, so an index set through PIP_* stays with pip. *)
   let pip_index =
@@ -471,6 +472,30 @@ let load request source =
           Result.map Option.some (Build_plan.argv [ "python"; "main.py" ])
         else Ok None
   in
+  let development =
+    match install with
+    | Uv_install _ ->
+        let* sync = Build_plan.argv [ "uv"; "sync" ] in
+        let+ start =
+          match start with
+          | None -> Ok None
+          | Some start ->
+              Result.map Option.some
+                (Build_plan.argv
+                   ([ "uv"; "run"; "--no-sync" ] @ Build_plan.arguments start))
+        in
+        {
+          Provider.inputs =
+            (match (read, page.Provider.inputs) with
+            | Manifests python, Manifests page -> Manifests (python @ page)
+            | Whole_source, _ | _, Whole_source -> Whole_source);
+          install = sync :: page.Provider.install;
+          build = page.Provider.build;
+          start;
+        }
+    | Pip_install _ | Manager_install _ ->
+        Json.metadata "Python" "development installs with uv; run uv lock"
+  in
   Ok
     {
       requirements;
@@ -488,7 +513,7 @@ let load request source =
       install_override = request.Request.install;
       install_commands = Request.install_commands request;
       build = Request.build_command request frontend;
-      page;
+      development;
     }
 
 let resolve app =
@@ -819,32 +844,6 @@ let plan app resolved =
         Start app.start;
       ])
 
-let development request app =
-  match app.install with
-  | Uv_install _ ->
-      let* sync = Request.install_command request [ "uv"; "sync" ] in
-      let+ start =
-        match app.start with
-        | None -> Ok None
-        | Some start ->
-            Result.map Option.some
-              (Build_plan.argv
-                 ([ "uv"; "run"; "--no-sync" ] @ Build_plan.arguments start))
-      in
-      {
-        Provider.inputs =
-          (match (app.inputs, app.page.Provider.inputs) with
-          | Manifests python, Manifests page -> Manifests (python @ page)
-          | Whole_source, _ | _, Whole_source -> Whole_source);
-        install =
-          app.install_commands [ Build_plan.Run sync ]
-          @ app.page.Provider.install;
-        build = Request.build_command request app.page.Provider.build;
-        start;
-      }
-  | Pip_install _ | Manager_install _ ->
-      Json.metadata "Python" "development installs with uv; run uv lock"
-
 let prepare request source =
   let* app = load request source in
   let* r = resolve app in
@@ -869,7 +868,7 @@ let prepare request source =
   in
   {
     Provider.plan;
-    steps = Some (development request app);
+    steps = Some app.development;
     packages =
       Package.resolve "python" app.python_declarations (Version.show r.python)
       :: packages;

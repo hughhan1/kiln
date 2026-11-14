@@ -86,6 +86,7 @@ type application = {
   inputs : inputs;
   build : Build_plan.operation list;
   command : Build_plan.argv option;
+  development : Provider.steps;
 }
 
 let selected_manager pkg source workspace =
@@ -185,14 +186,18 @@ let load (request : Request.t) source =
   let manager_text = Package.versions manager_declarations in
   let* manager_ranges = Support.traverse parse_range manager_text in
   let* build_argv = Build_plan.argv [ name pm; "run"; "build" ] in
+  let* development_install = Build_plan.argv [ name pm; "install" ] in
+  let scripted =
+    if Javascript.has_script pkg "build" then [ build_argv ] else []
+  in
   let* command =
     Javascript.startup pkg ~override:(Request.start request)
       ~script:[ name pm; "run"; "start" ]
       ~main:[ "node" ]
   in
+  let read = install_inputs source workspace packages in
   let inputs =
-    if Request.replaces_install request then Whole_source
-    else install_inputs source workspace packages
+    if Request.replaces_install request then Whole_source else read
   in
   let+ install =
     Request.install_command request
@@ -215,9 +220,15 @@ let load (request : Request.t) source =
     inputs;
     build =
       Request.build_command request
-        (if Javascript.has_script pkg "build" then [ Build_plan.Run build_argv ]
-         else []);
+        (List.map (fun command -> Build_plan.Run command) scripted);
     command;
+    development =
+      {
+        Provider.inputs = read;
+        install = [ development_install ];
+        build = scripted;
+        start = command;
+      };
   }
 
 (* The default is the newest LTS release; EOL lines never enter the pins. *)
@@ -436,17 +447,6 @@ let plan app r =
         Start app.command;
       ])
 
-let development request app =
-  let+ install =
-    Request.install_command request [ name app.manager; "install" ]
-  in
-  {
-    Provider.inputs = app.inputs;
-    install = app.install_commands [ Build_plan.Run install ];
-    build = app.build;
-    start = app.command;
-  }
-
 let detect source =
   if not (Source.has source "package.json") then Ok Provider.No_match
   else
@@ -467,7 +467,7 @@ let prepare request source =
   let+ plan = plan app r in
   {
     Provider.plan;
-    steps = Some (development request app);
+    steps = Some (Ok app.development);
     packages =
       [
         Package.resolve "node" app.node_declarations (Semver.show r.node);
@@ -519,10 +519,9 @@ let frontend ~exclude source =
         let open Build_plan in
         let* r = resolve app in
         let* base = toolchain r (Native r.builder) in
-        let* output =
+        let+ output =
           stage (Stage base)
             (install_steps app (Source.copy ~exclude [ "." ] ".") @ app.build)
         in
-        let+ steps = development request app in
         ( [ copy ~exclude:[ "**/node_modules" ] output [ "/app/" ] "/app/" ],
-          steps )
+          app.development )

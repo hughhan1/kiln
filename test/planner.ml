@@ -366,9 +366,12 @@ let () =
         Some
           {|{"inputs":["."],"install":[["pnpm","install"]],"build":[["pnpm","run","build"]],"start":["pnpm","run","start"]}|}
       );
-      ( "uv with a page",
+      ( "uv with a page, whose image configuration does not apply",
         uv_lock :: ("package.json", page)
         :: ("package-lock.json", "{}")
+        :: ( "railpack.json",
+             {|{"steps":{"install":{"commands":["...",{"path":"/opt/node/bin"}]},"build":{"commands":["vite build"]}}}|}
+           )
         :: python,
         serve,
         Some
