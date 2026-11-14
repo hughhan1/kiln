@@ -1,14 +1,7 @@
 open Result.Syntax
 
 type detection = No_match | Fallback | Explicit
-type inputs = Whole_source | Manifests of string list
-
-type steps = {
-  inputs : inputs;
-  install : Build_plan.argv list;
-  build : Build_plan.argv list;
-  start : Build_plan.argv option;
-}
+type steps = { install : Build_plan.argv list; build : Build_plan.argv list }
 
 type output = {
   plan : Build_plan.t;
@@ -23,7 +16,7 @@ module type S = sig
   val exclude : string list
   val detect : Source.t -> (detection, Error.t) result
   val prepare : Request.t -> Source.t -> (output, Error.t) result
-  val develop : Request.t -> Source.t -> (steps, Error.t) result
+  val develop : Source.t -> (steps, Error.t) result
 end
 
 type t = (module S)

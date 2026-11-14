@@ -72,7 +72,7 @@ let workspace bytes =
   if List.exists (fun key -> key <> "packages") keys then With_settings
   else Packages_only
 
-type inputs = Provider.inputs = Whole_source | Manifests of string list
+type inputs = Whole_source | Manifests of string list
 
 type application = {
   nodes : node_request list;
@@ -86,15 +86,16 @@ type application = {
   inputs : inputs;
   build : Build_plan.operation list;
   command : Build_plan.argv option;
-  development : Provider.steps;
 }
 
-let selected_manager pkg source workspace =
+let selected_manager pkg source =
   match pkg.Javascript.managers with
   | [] ->
       Ok
-        (if Source.has source "pnpm-lock.yaml" || Option.is_some workspace then
-           Pnpm
+        (if
+           List.exists (Source.has source)
+             [ "pnpm-lock.yaml"; "pnpm-workspace.yaml" ]
+         then Pnpm
          else Npm)
   | first :: rest ->
       if List.for_all (fun d -> d.Javascript.name = first.Javascript.name) rest
@@ -178,7 +179,7 @@ let load (request : Request.t) source =
   in
   let nodes_text = Package.versions node_declarations in
   let* nodes = Support.traverse node_request nodes_text in
-  let* pm = selected_manager pkg source workspace in
+  let* pm = selected_manager pkg source in
   let manager_declarations =
     Request.defaults request (name pm)
       (Javascript.requests ~path:"package.json" pkg.Javascript.managers)
@@ -186,18 +187,14 @@ let load (request : Request.t) source =
   let manager_text = Package.versions manager_declarations in
   let* manager_ranges = Support.traverse parse_range manager_text in
   let* build_argv = Build_plan.argv [ name pm; "run"; "build" ] in
-  let* development_install = Build_plan.argv [ name pm; "install" ] in
-  let scripted =
-    if Javascript.has_script pkg "build" then [ build_argv ] else []
-  in
   let* command =
     Javascript.startup pkg ~override:(Request.start request)
       ~script:[ name pm; "run"; "start" ]
       ~main:[ "node" ]
   in
-  let read = install_inputs source workspace packages in
   let inputs =
-    if Request.replaces_install request then Whole_source else read
+    if Request.replaces_install request then Whole_source
+    else install_inputs source workspace packages
   in
   let+ install =
     Request.install_command request
@@ -220,15 +217,9 @@ let load (request : Request.t) source =
     inputs;
     build =
       Request.build_command request
-        (List.map (fun command -> Build_plan.Run command) scripted);
+        (if Javascript.has_script pkg "build" then [ Build_plan.Run build_argv ]
+         else []);
     command;
-    development =
-      {
-        Provider.inputs = read;
-        install = [ development_install ];
-        build = scripted;
-        start = command;
-      };
   }
 
 (* The default is the newest LTS release; EOL lines never enter the pins. *)
@@ -502,35 +493,33 @@ let prepare request source =
         ];
   }
 
-let develop request source =
-  let+ app = load request source in
-  app.development
-
-let page_app source =
-  if not (Source.has source "package.json") then Ok None
+let develop source =
+  if not (Source.has source "package.json") then
+    Ok { Provider.install = []; build = [] }
   else
-    let* request = Request.decode [ ("source", `String "") ] in
-    let+ app = load request source in
-    match app.build with [] -> None | _ :: _ -> Some app
-
-let page source =
-  let+ app = page_app source in
-  Option.fold
-    ~none:
-      { Provider.inputs = Manifests []; install = []; build = []; start = None }
-    ~some:(fun app -> app.development)
-    app
+    let* pkg = Javascript.root source in
+    let* pm = selected_manager pkg source in
+    let* install = Build_plan.argv [ name pm; "install" ] in
+    let+ build =
+      if Javascript.has_script pkg "build" then
+        Result.map List.singleton (Build_plan.argv [ name pm; "run"; "build" ])
+      else Ok []
+    in
+    { Provider.install = [ install ]; build }
 
 let frontend ~exclude source =
-  let* app = page_app source in
-  match app with
-  | None -> Ok []
-  | Some app ->
-      let open Build_plan in
-      let* r = resolve app in
-      let* base = toolchain r (Native r.builder) in
-      let+ output =
-        stage (Stage base)
-          (install_steps app (Source.copy ~exclude [ "." ] ".") @ app.build)
-      in
-      [ copy ~exclude:[ "**/node_modules" ] output [ "/app/" ] "/app/" ]
+  if not (Source.has source "package.json") then Ok []
+  else
+    let* request = Request.decode [ ("source", `String "") ] in
+    let* app = load request source in
+    match app.build with
+    | [] -> Ok []
+    | _ :: _ ->
+        let open Build_plan in
+        let* r = resolve app in
+        let* base = toolchain r (Native r.builder) in
+        let+ output =
+          stage (Stage base)
+            (install_steps app (Source.copy ~exclude [ "." ] ".") @ app.build)
+        in
+        [ copy ~exclude:[ "**/node_modules" ] output [ "/app/" ] "/app/" ]

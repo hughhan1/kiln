@@ -26,7 +26,7 @@ let detect source =
     then Provider.Explicit
     else Provider.No_match
 
-let develop _ _ =
+let develop _ =
   Error (Kiln_planning.Error.Unsupported ("development with " ^ id))
 
 let prepare request source =

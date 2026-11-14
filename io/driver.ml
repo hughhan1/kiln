@@ -78,43 +78,55 @@ let source cancelled root exclude files links =
             resolve path));
   }
 
-let run ?(providers = Kiln_providers.Builtin.all) ?(cancelled = fun () -> false)
-    plan fields =
+let directory path =
+  if Filename.is_relative path || not (Sys.is_directory path) then
+    Error (Error.Filesystem "source must be an existing absolute directory")
+  else
+    let root = Unix.realpath path in
+    Ok (root, List.sort String.compare (Array.to_list (Sys.readdir root)))
+
+let planned cancelled providers ~requested root probe plan =
+  let* selection = Provider.select providers ~requested probe in
+  let (module P) = selection.Provider.provider in
+  let exclude = Source.omitted @ P.exclude in
+  let* files, links = walk cancelled exclude root "" in
+  let* planned = plan selection (source cancelled root exclude files links) in
+  let+ () = check cancelled in
+  planned
+
+let prepare ?(providers = Kiln_providers.Builtin.all)
+    ?(cancelled = fun () -> false) fields =
   let* request = Request.decode fields in
   filesystem @@ fun () ->
   let* () = check cancelled in
-  if
-    Filename.is_relative request.Request.source
-    || not (Sys.is_directory request.Request.source)
-  then Error (Error.Filesystem "source must be an existing absolute directory")
-  else
-    let root = Unix.realpath request.Request.source in
-    let files = Array.to_list (Sys.readdir root) |> List.sort String.compare in
-    let config = request.Request.config_file in
-    let files =
-      if Sys.file_exists (Filename.concat root config) then config :: files
-      else files
-    in
-    let probe = source cancelled root [ ".git" ] files false in
-    let* request = Request.configure request probe in
-    let* selection =
-      Provider.select providers ~requested:request.Request.provider probe
-    in
-    let (module P) = selection.Provider.provider in
-    let exclude = Source.omitted @ P.exclude in
-    let* files, links = walk cancelled exclude root "" in
-    let source = source cancelled root exclude files links in
-    let* planned = plan selection request source in
-    let+ () = check cancelled in
-    planned
+  let* root, files = directory request.Request.source in
+  let config = request.Request.config_file in
+  let files =
+    if Sys.file_exists (Filename.concat root config) then config :: files
+    else files
+  in
+  let probe = source cancelled root [ ".git" ] files false in
+  let* request = Request.configure request probe in
+  planned cancelled providers ~requested:request.Request.provider root probe
+    (fun selection source -> Planner.prepare selection request source)
 
-let prepare ?providers ?cancelled = run ?providers ?cancelled Planner.prepare
+let develop providers cancelled path =
+  filesystem @@ fun () ->
+  let* () = check cancelled in
+  let* root, files = directory path in
+  planned cancelled providers ~requested:None root
+    (source cancelled root [ ".git" ] files false)
+    Planner.develop
 
-let plan ?providers ?cancelled bytes =
+let plan ?(providers = Kiln_providers.Builtin.all)
+    ?(cancelled = fun () -> false) bytes =
   let* fields = Json.decode "request" Json.object_ bytes in
-  run ?providers ?cancelled
-    (fun selection request source ->
-      if request.Request.development then
-        Planner.develop selection request source
-      else Result.map Planner.encode (Planner.prepare selection request source))
-    fields
+  let* development =
+    Json.field "development" (Json.default false Json.boolean) fields
+  in
+  if development then
+    let* source = Json.field "source" Json.string fields in
+    develop providers cancelled source
+  else
+    let+ prepared = prepare ~providers ~cancelled fields in
+    Planner.encode prepared

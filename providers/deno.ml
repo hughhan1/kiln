@@ -89,7 +89,7 @@ let config source path =
   let+ tasks = Json.field "tasks" (Json.default [] (Json.assoc task)) fields in
   (fields, tasks)
 
-let develop _ _ =
+let develop _ =
   Error (Kiln_planning.Error.Unsupported ("development with " ^ id))
 
 let prepare request source =

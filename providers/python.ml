@@ -48,7 +48,7 @@ and manager = Poetry | Pdm
 
 let manager_name = function Poetry -> "poetry" | Pdm -> "pdm"
 
-type inputs = Provider.inputs = Whole_source | Manifests of string list
+type inputs = Whole_source | Manifests of string list
 
 type application = {
   requirements : Version.requirement list;
@@ -60,7 +60,7 @@ type application = {
   native : string list option;
   installable : bool;
   start : Build_plan.argv option;
-  development : (Provider.steps, Kiln_planning.Error.t) result;
+  build : Build_plan.operation list;
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   install_override : Build_plan.argv option;
 }
@@ -421,16 +421,15 @@ let load request source =
   (* uv builds the root project to read dynamic metadata. *)
   let* dynamic = Toml.field root [ "project"; "dynamic" ] Otoml.get_value in
   let* dynamic_fields = Toml.strings root [ "project"; "dynamic" ] in
-  let read =
-    install_inputs source install ~installable ~requirements:pip_requirements
-      ~project:root_local
-      ~lock:(uv_lock_local || manager_lock_local)
-      ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
-      ~static_dependencies:
-        (Option.is_some name && not (List.mem "dependencies" dynamic_fields))
-  in
   let inputs =
-    if Request.replaces_install request then Whole_source else read
+    if Request.replaces_install request then Whole_source
+    else
+      install_inputs source install ~installable ~requirements:pip_requirements
+        ~project:root_local
+        ~lock:(uv_lock_local || manager_lock_local)
+        ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
+        ~static_dependencies:
+          (Option.is_some name && not (List.mem "dependencies" dynamic_fields))
   in
   (* uv ignores pip's environment, so an index set through PIP_* stays with pip. *)
   let pip_index =
@@ -447,7 +446,7 @@ let load request source =
         (Whole_source | Manifests _) ) ->
         None
   in
-  let* page = Node.page source in
+  let* frontend = Node.frontend ~exclude:(manifests @ exclude) source in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
   in
@@ -460,30 +459,6 @@ let load request source =
         if Source.has source "main.py" then
           Result.map Option.some (Build_plan.argv [ "python"; "main.py" ])
         else Ok None
-  in
-  let development =
-    match install with
-    | Uv_install _ ->
-        let* sync = Build_plan.argv [ "uv"; "sync" ] in
-        let+ start =
-          match start with
-          | None -> Ok None
-          | Some start ->
-              Result.map Option.some
-                (Build_plan.argv
-                   ([ "uv"; "run"; "--no-sync" ] @ Build_plan.arguments start))
-        in
-        {
-          Provider.inputs =
-            (match (read, page.Provider.inputs) with
-            | Manifests python, Manifests page -> Manifests (python @ page)
-            | Whole_source, _ | _, Whole_source -> Whole_source);
-          install = sync :: page.Provider.install;
-          build = page.Provider.build;
-          start;
-        }
-    | Pip_install _ | Manager_install _ ->
-        Json.metadata "Python" "development installs with uv; run uv lock"
   in
   Ok
     {
@@ -501,7 +476,7 @@ let load request source =
       start;
       install_override = request.Request.install;
       install_commands = Request.install_commands request;
-      development;
+      build = Request.build_command request frontend;
     }
 
 let resolve app =
@@ -596,7 +571,7 @@ let overlay_project = "cp -R /opt/kiln-project/. /opt/venv/"
 let compile_venv =
   Build_plan.shell "python -m compileall -qq -j 0 /opt/venv || true"
 
-let plan app resolved build =
+let plan app resolved =
   let open Build_plan in
   let* setup, defaults, manager_environment =
     match app.install with
@@ -709,7 +684,7 @@ let plan app resolved build =
           stage (Image resolved.builder)
             ([ Workdir "/app"; Env env; venv ]
             @ (copy_source :: app.install_commands (setup @ commands @ compile))
-            @ build)
+            @ app.build)
         in
         (builder, builder, finish)
     | Manifests paths ->
@@ -786,7 +761,7 @@ let plan app resolved build =
         in
         let+ build =
           stage (Stage dependencies)
-            (Source.copy ~exclude [ "." ] "/app/" :: (finish @ build))
+            (Source.copy ~exclude [ "." ] "/app/" :: (finish @ app.build))
         in
         (dependencies, build, finish)
   in
@@ -832,15 +807,18 @@ let plan app resolved build =
         Start app.start;
       ])
 
-let develop request source =
-  let* app = load request source in
-  app.development
+let develop source =
+  if not (Source.has source "uv.lock") then
+    Json.metadata "Python" "development installs with uv; run uv lock"
+  else
+    let* sync = Build_plan.argv [ "uv"; "sync" ] in
+    let+ page = Node.develop source in
+    { page with Provider.install = sync :: page.Provider.install }
 
 let prepare request source =
   let* app = load request source in
   let* r = resolve app in
-  let* frontend = Node.frontend ~exclude:(manifests @ exclude) source in
-  let+ plan = plan app r (Request.build_command request frontend) in
+  let+ plan = plan app r in
   let installer, packages, installer_fields =
     match app.install with
     | Pip_install _ -> ("pip", [], [])

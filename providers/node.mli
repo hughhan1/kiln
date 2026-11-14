@@ -12,8 +12,8 @@ val frontend :
     before the source unless it needs the source, and the build run on the build
     platform. The output omits node_modules. *)
 
-val page :
+val develop :
   Kiln_planning.Source.t ->
   (Kiln_planning.Provider.steps, Kiln_planning.Error.t) result
-(** The install and build a development environment runs for that root
-    package.json; nothing without a [build] script. *)
+(** The root package.json's install, then its [build] script if it has one;
+    nothing without a package.json. *)

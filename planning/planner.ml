@@ -9,22 +9,16 @@ type prepared = {
   metadata : (string * string) list;
 }
 
-let argv command = Json.string_array (Build_plan.arguments command)
-
-let develop { Provider.provider = (module P); _ } request source =
-  let+ { Provider.inputs; install; build; start } = P.develop request source in
+let develop { Provider.provider = (module P); _ } source =
+  let+ { Provider.install; build } = P.develop source in
+  let commands steps =
+    `List
+      (List.map
+         (fun command -> Json.string_array (Build_plan.arguments command))
+         steps)
+  in
   Json.encode
-  @@ `Assoc
-       [
-         ( "inputs",
-           Json.string_array
-             (match inputs with
-             | Provider.Whole_source -> [ "." ]
-             | Provider.Manifests paths -> paths) );
-         ("install", `List (List.map argv install));
-         ("build", `List (List.map argv build));
-         ("start", Option.fold ~none:`Null ~some:argv start);
-       ]
+    (`Assoc [ ("install", commands install); ("build", commands build) ])
 
 let prepare { Provider.provider = (module P); detected } (request : Request.t)
     source =

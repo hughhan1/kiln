@@ -14,7 +14,6 @@ type t = {
   build : Commands.t option;
   config_file : string;
   variables : Build_plan.environment option;
-  development : bool;
 }
 
 let prefer value fallback =
@@ -95,9 +94,6 @@ let decode fields =
       fields
   in
   let config_file = Option.value ~default:config_file (config "CONFIG_FILE") in
-  let* development =
-    Json.field "development" (Json.default false Json.boolean) fields
-  in
   let+ provider = Json.field "provider" (Json.optional Json.string) fields in
   {
     source;
@@ -111,7 +107,6 @@ let decode fields =
     build;
     config_file;
     variables = None;
-    development;
   }
 
 let build_command request default =

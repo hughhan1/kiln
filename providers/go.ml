@@ -44,13 +44,7 @@ let parse_version value =
     (fun message -> Error.Metadata ("go.mod", message))
     (Semver.version value)
 
-let develop request source =
-  let* page = Node.page source in
-  let+ go_run = Build_plan.argv [ "go"; "run"; "." ] in
-  {
-    page with
-    Provider.start = Some (Option.value (Request.start request) ~default:go_run);
-  }
+let develop = Node.develop
 
 let prepare request source =
   let* () =

@@ -2,18 +2,10 @@
     prepare its plan from the pinned toolchains. *)
 
 type detection = No_match | Fallback | Explicit
-type inputs = Whole_source | Manifests of string list
 
-type steps = {
-  inputs : inputs;
-  install : Build_plan.argv list;
-  build : Build_plan.argv list;
-  start : Build_plan.argv option;
-}
-(** What a development environment runs in the source directory: [install]
-    whenever [inputs], the files it reads or the whole source, change; then
-    [build], then [start]. The app's build configuration, which configures an
-    image, does not apply. *)
+type steps = { install : Build_plan.argv list; build : Build_plan.argv list }
+(** What a development environment runs in the source directory: [install], then
+    [build]. *)
 
 type output = {
   plan : Build_plan.t;
@@ -44,9 +36,9 @@ module type S = sig
   (** Parse manifests and request overrides, select immutable toolchain pins,
       and generate a validated plan, failing in that order. *)
 
-  val develop : Request.t -> Source.t -> (steps, Error.t) result
-  (** Parse manifests and request overrides into what a development environment
-      runs, without selecting toolchain pins or planning an image. *)
+  val develop : Source.t -> (steps, Error.t) result
+  (** Read the manifests a development environment installs from, and nothing
+      that configures an image. *)
 end
 
 type t = (module S)

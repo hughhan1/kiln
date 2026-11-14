@@ -325,7 +325,7 @@ let () =
       in
       check "custom path used"
         (contains (Build_plan.dockerfile plan.Planner.plan) "echo nested"));
-  let page = {|{"scripts":{"build":"vite build","start":"node server.js"}}|} in
+  let page = {|{"scripts":{"build":"vite build"}}|} in
   let python =
     [
       ( "pyproject.toml",
@@ -337,17 +337,11 @@ let () =
     ]
   in
   let uv_lock = ("uv.lock", "version = 1\nrequires-python = \">=3.12\"\n") in
-  let serve =
-    [
-      ("start", Json.string_array [ "python"; "-m"; "holon.serve"; "server.py" ]);
-    ]
-  in
   List.iter
-    (fun (name, files, fields, expected) ->
+    (fun (name, files, expected) ->
       snapshot files ("development steps: " ^ name) (fun root ->
           let planned =
-            Kiln_io.Driver.plan
-              (request root (("development", `Bool true) :: fields))
+            Kiln_io.Driver.plan (request root [ ("development", `Bool true) ])
           in
           match (planned, expected) with
           | Ok response, Some steps ->
@@ -358,40 +352,34 @@ let () =
           | Ok response, None -> failwith ("planned: " ^ response)
           | Error error, Some _ -> failwith (Kiln_planning.Error.show error)))
     [
-      ( "pnpm leaves its lockfile unfrozen, and an npm config reads the source",
-        [ ("package.json", page); ("pnpm-lock.yaml", ""); (".npmrc", "") ],
-        [],
+      ( "pnpm leaves its lockfile unfrozen, for an image Kiln cannot plan",
+        [
+          ( "package.json",
+            {|{"engines":{"node":">=99"},"scripts":{"build":"vite build"}}|} );
+          ("pnpm-lock.yaml", "");
+        ],
         Some
-          {|{"inputs":["."],"install":[["pnpm","install"]],"build":[["pnpm","run","build"]],"start":["pnpm","run","start"]}|}
+          {|{"install":[["pnpm","install"]],"build":[["pnpm","run","build"]]}|}
       );
-      ( "uv with a page, whose image configuration does not apply",
+      ( "uv with a page, whose railpack.json does not apply",
         uv_lock :: ("package.json", page)
-        :: ("package-lock.json", "{}")
         :: ( "railpack.json",
              {|{"steps":{"install":{"commands":["...",{"path":"/opt/node/bin"}]},"build":{"commands":["vite build"]}}}|}
            )
         :: python,
-        serve,
         Some
-          {|{"inputs":["pyproject.toml","uv.lock","package-lock.json","package.json"],"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]],"start":["uv","run","--no-sync","python","-m","holon.serve","server.py"]}|}
+          {|{"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]]}|}
       );
-      ( "an image Kiln cannot plan",
+      ( "uv alone",
+        uv_lock :: python,
+        Some {|{"install":[["uv","sync"]],"build":[]}|} );
+      ("Python without uv.lock", python, None);
+      ( "Go whose package.json builds nothing",
         [
-          ( "package.json",
-            {|{"engines":{"node":">=99"},"scripts":{"start":"node server.js"}}|}
-          );
+          ("go.mod", "module example\ngo 1.27\n");
+          ("package.json", {|{"dependencies":{"holon-sh":"^0.0.1"}}|});
         ],
-        [],
-        Some
-          {|{"inputs":["package.json"],"install":[["npm","install"]],"build":[],"start":["npm","run","start"]}|}
-      );
-      ("Python without uv.lock", python, serve, None);
-      ( "Go with a page",
-        [ ("go.mod", "module example\ngo 1.27\n"); ("package.json", page) ],
-        [],
-        Some
-          {|{"inputs":["package.json"],"install":[["npm","install"]],"build":[["npm","run","build"]],"start":["go","run","."]}|}
-      );
-      ("Bun", [ ("package.json", {|{"packageManager":"bun@1"}|}) ], [], None);
+        Some {|{"install":[["npm","install"]],"build":[]}|} );
+      ("Bun", [ ("package.json", {|{"packageManager":"bun@1"}|}) ], None);
     ];
   finish ()
