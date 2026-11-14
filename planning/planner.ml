@@ -49,7 +49,8 @@ let run (module P : Provider.S) plan
       ([
          "/bin/sh";
          "-c";
-         {|"$@" >/tmp/kiln-run/stdout 2>/tmp/kiln-run/stderr; echo $? >/tmp/kiln-run/status|};
+         Printf.sprintf {|"$@" >%s/stdout 2>%s/stderr; echo $? >%s/status|}
+           output output output;
          "sh";
        ]
       @ Build_plan.arguments command)
