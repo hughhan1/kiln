@@ -16,19 +16,14 @@ let uv_tool_version = "0.13.1"
 let includes = [ "node" ]
 let exclude = [ "__pycache__"; ".pytest_cache"; ".mypy_cache"; ".ruff_cache" ]
 
-let manifests =
-  [
-    "requirements.txt";
-    "pyproject.toml";
-    "uv.lock";
-    "poetry.lock";
-    "pdm.lock";
-    ".python-version";
-  ]
+let evidence =
+  [ "requirements.txt"; "pyproject.toml"; "uv.lock"; "poetry.lock"; "pdm.lock" ]
+
+let manifests = evidence @ [ ".python-version" ]
 
 let detect source =
   Ok
-    (if List.exists (Source.has source) manifests then Provider.Explicit
+    (if List.exists (Source.has source) evidence then Provider.Explicit
      else if Source.has source "main.py" then Provider.Fallback
      else Provider.No_match)
 
@@ -741,7 +736,17 @@ let develop source =
   else
     let* sync = Build_plan.argv [ "uv"; "sync" ] in
     let+ page = Node.develop source in
-    { page with Provider.install = sync :: page.Provider.install }
+    {
+      page with
+      Provider.inputs =
+        List.filter
+          (fun path ->
+            Filename.basename path = "pyproject.toml"
+            || List.mem path [ "uv.lock"; "uv.toml"; ".python-version" ])
+          source.Source.files
+        @ page.Provider.inputs;
+      install = sync :: page.Provider.install;
+    }
 
 let prepare request source =
   let* app = load request source in

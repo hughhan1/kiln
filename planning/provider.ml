@@ -1,7 +1,12 @@
 open Result.Syntax
 
 type detection = No_match | Fallback | Explicit
-type steps = { install : Build_plan.argv list; build : Build_plan.argv list }
+
+type steps = {
+  inputs : string list;
+  install : Build_plan.argv list;
+  build : Build_plan.argv list;
+}
 
 module type S = sig
   val id : string

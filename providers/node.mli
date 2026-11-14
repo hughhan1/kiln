@@ -15,5 +15,6 @@ val frontend :
 val develop :
   Kiln_planning.Source.t ->
   (Kiln_planning.Provider.steps, Kiln_planning.Error.t) result
-(** The root package.json's install, then its [build] script if it has one;
-    nothing without a package.json. *)
+(** The root package.json's install, rerun when a manifest or install
+    configuration changes, then its [build] script if it has one; nothing
+    without a package.json. *)
