@@ -5,12 +5,7 @@ open Result.Syntax
 module Semver = Kiln_planning.Semver
 module Error = Kiln_planning.Error
 
-type requirements = {
-  declarations : Package.requirement list;
-  ranges : Semver.range list;
-}
-
-type t = { version : Semver.version; image : Build_plan.image }
+type requirements = { declarations : string list; ranges : Semver.range list }
 
 let parse parser value =
   Result.map_error
@@ -18,16 +13,12 @@ let parse parser value =
     (parser value)
 
 let requirements declarations =
-  let versions =
-    List.sort_uniq String.compare (Package.versions declarations)
-  in
+  let versions = List.sort_uniq String.compare declarations in
   let+ ranges = Support.traverse (parse Semver.range) versions in
   { declarations; ranges }
 
-let image resolved = resolved.image
-
 let resolve ~tool ?(accept = fun _ -> true) ~pins requirements =
-  let* version, pin =
+  let* _, pin =
     Package.select ~tool ~declarations:requirements.declarations
       ~version:(fun pin -> pin.Pins.version)
       ~parse:(parse Semver.version)
@@ -38,15 +29,4 @@ let resolve ~tool ?(accept = fun _ -> true) ~pins requirements =
              requirements.ranges)
       pins
   in
-  let+ image = Build_plan.image pin.Pins.image in
-  { version; image }
-
-let encode resolved =
-  `Assoc
-    [
-      ("version", `String (Semver.show resolved.version));
-      ("image", `String (Build_plan.image_ref resolved.image));
-    ]
-
-let package name requirements resolved =
-  Package.resolve name requirements.declarations (Semver.show resolved.version)
+  Build_plan.image pin.Pins.image

@@ -14,12 +14,6 @@ val arguments : argv -> string list
 val shell : string -> (argv, Error.t) result
 (** Run a nonblank script with [/bin/sh -c]; reject embedded NUL bytes. *)
 
-type environment
-
-val environment : (string * string) list -> (environment, Error.t) result
-(** Require at least one variable, nonempty alphanumeric/underscore names, and
-    values without NUL, newline, or carriage return. *)
-
 type image
 
 val image : string -> (image, Error.t) result
@@ -49,12 +43,11 @@ type operation =
       owner : (int * int) option;
     }
   | Workdir of string
-  | Env of environment
+  | Env of (string * string) list
   | User of int * int
-  | Entrypoint of argv option
+  | Entrypoint
   | Start of argv option
   | Prepend_path of string
-  | Write of { path : string; contents : string; mode : int }
 
 val external_image : string -> (input, Error.t) result
 val validate_operations : operation list -> (unit, Error.t) result
@@ -74,14 +67,9 @@ val base : stage -> base
 val operations : stage -> operation list
 (** Operations in Dockerfile execution order. *)
 
-val startup : t -> argv option
-(** The last CMD in this stage, or an inherited CMD unless ENTRYPOINT resets it.
-*)
-
-val dockerfile : ?secrets:Environment.Names.t -> t -> string
+val dockerfile : t -> string
 (** Render dependencies once, with stable stage names and JSON-escaped argument
-    arrays. Mount each supplied secret as a required environment variable on RUN
-    operations; values are never written into the Dockerfile. *)
+    arrays. *)
 
 val run : string list -> (operation, Error.t) result
 (** Construct a RUN operation after validating its argv. *)

@@ -12,9 +12,7 @@ static void diagnostic(kiln_result result, kiln_status status) {
   if (result.status != status) fprintf(stderr, "status %d: %.*s\n", result.status, (int)result.len, result.data);
   REQUIRE(result.status == status && result.len != 0);
   REQUIRE(result.len == strlen(result.data));
-  REQUIRE(strstr(result.data, "\"success\":false") != NULL);
-  REQUIRE(strstr(result.data, "\"logs\":[{") != NULL);
-  REQUIRE(strstr(result.data, "\"Level\":\"error\"") != NULL);
+  REQUIRE(strncmp(result.data, "{\"error\":\"", 10) == 0);
 }
 
 static void *invalid(void *unused) {

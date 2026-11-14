@@ -3,7 +3,7 @@
 
 type algorithm = [ `SHA224 | `SHA256 | `SHA384 | `SHA512 ]
 type integrity = private Integrity of algorithm * string
-type declaration = { name : string; requested : string option; source : string }
+type declaration = { name : string; requested : string option }
 
 type package = {
   engines : (string * string) list;
@@ -40,13 +40,10 @@ val load :
 val root : Kiln_planning.Source.t -> (package, Kiln_planning.Error.t) result
 (** Read only the root package.json for provider detection. *)
 
-val requests :
-  path:string -> declaration list -> Kiln_planning.Package.requirement list
+val requests : declaration list -> string list
+(** The versions the declarations request, in order. *)
 
 val requirements :
-  path:string ->
-  runtime:string ->
-  package ->
-  (Kiln_planning.Package.requirement list, Kiln_planning.Error.t) result
+  runtime:string -> package -> (string list, Kiln_planning.Error.t) result
 (** Collect declarations for a runtime, rejecting declarations naming a
     different runtime or manager. *)

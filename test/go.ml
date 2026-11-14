@@ -1,4 +1,3 @@
-module Planner = Kiln_planning.Planner
 module Build_plan = Kiln_planning.Build_plan
 module Pins = Kiln_providers.Pins
 open Contract_support
@@ -14,13 +13,11 @@ let () =
     [ ("go.mod", go_mod oldest newest); ("server.go", "package main") ]
     "an explicit toolchain builds the whole package"
     (fun root ->
-      let plan = ok (prepare root []) in
+      let dockerfile = Build_plan.dockerfile (ok (prepare root [])) in
       check "whole package startup"
-        (Option.map Build_plan.arguments (Build_plan.startup plan.Planner.plan)
-        = Some [ "/app/bin/server" ]);
-      check "explicit toolchain"
-        (Yojson.Basic.Util.member "resolvedVersion" (package plan "go")
-        = `String newest));
+        (contains dockerfile {|CMD ["/app/bin/server"]|});
+      check "the toolchain line wins over the go line"
+        (contains dockerfile (last Pins.golang).Pins.image));
   snapshot
     [
       ("go.mod", go_mod oldest newest);
@@ -29,7 +26,7 @@ let () =
     ]
     "a package.json build runs before go build, without Go's files"
     (fun root ->
-      let dockerfile = Planner.dockerfile (ok (prepare root [])) in
+      let dockerfile = Build_plan.dockerfile (ok (prepare root [])) in
       check "frontend, then go build"
         (ordered
            (String.split_on_char '\n' dockerfile)

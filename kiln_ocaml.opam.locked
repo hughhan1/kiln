@@ -18,7 +18,6 @@ depends: [
   "base-unix" {= "base"}
   "bigstringaf" {= "0.10.0"}
   "bos" {= "0.3.0"}
-  "cmdliner" {= "2.1.1"}
   "csexp" {= "1.5.2"}
   "ctypes" {= "0.24.0"}
   "digestif" {= "1.3.0"}

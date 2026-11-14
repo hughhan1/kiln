@@ -34,13 +34,6 @@ let shell script =
     Error (Error.Metadata ("command", "expected nonempty shell command"))
   else argv [ "/bin/sh"; "-c"; script ]
 
-type environment = (string * string) list
-
-let environment pairs =
-  let valid (key, value) = Environment.valid_name key && single_line value in
-  if pairs <> [] && List.for_all valid pairs then Ok pairs
-  else Error (Error.Metadata ("environment", "invalid variable"))
-
 type image = string
 
 let image value =
@@ -77,12 +70,11 @@ and operation =
       owner : (int * int) option;
     }
   | Workdir of string
-  | Env of environment
+  | Env of (string * string) list
   | User of int * int
-  | Entrypoint of argv option
+  | Entrypoint
   | Start of argv option
   | Prepend_path of string
-  | Write of { path : string; contents : string; mode : int }
 
 let validate_operations operations =
   let valid = function
@@ -99,10 +91,8 @@ let validate_operations operations =
              exclude
         && Option.fold ~none:true ~some:(fun (u, g) -> u >= 0 && g >= 0) owner
     | Workdir path | Prepend_path path -> path <> "" && single_line path
-    | Write { path; mode; _ } ->
-        path <> "" && clean path && mode >= 0 && mode <= 0o7777
     | User (u, g) -> u >= 0 && g >= 0
-    | Run _ | Env _ | Entrypoint _ | Start _ -> true
+    | Run _ | Env _ | Entrypoint | Start _ -> true
   in
   if List.for_all valid operations then Ok ()
   else Error (Error.Metadata ("build plan", "invalid operation"))
@@ -130,30 +120,14 @@ let stages root =
           (fun seen -> function
             | Copy { input = Output stage; _ } -> visit seen stage
             | Copy { input = Context | External _; _ }
-            | Run _ | Workdir _ | Env _ | User _ | Entrypoint _ | Start _
-            | Prepend_path _ | Write _ ->
+            | Run _ | Workdir _ | Env _ | User _ | Entrypoint | Start _
+            | Prepend_path _ ->
                 seen)
           seen stage.operations
       in
       stage :: seen
   in
   List.rev (visit [] root)
-
-let rec startup stage =
-  let inherited () =
-    match stage.base with
-    | Image _ | Native _ -> None
-    | Stage parent -> startup parent
-  in
-  let rec local fallback = function
-    | [] -> fallback ()
-    | Start args :: _ -> args
-    | Entrypoint _ :: rest -> local (fun () -> None) rest
-    | (Copy _ | Run _ | Workdir _ | Env _ | User _ | Prepend_path _ | Write _)
-      :: rest ->
-        local fallback rest
-  in
-  local inherited (List.rev stage.operations)
 
 let run args =
   let+ args = argv args in
@@ -181,14 +155,7 @@ let external_image reference =
   then Ok (External reference)
   else Error (Error.Metadata ("image", "invalid image reference"))
 
-let dockerfile ?(secrets = Environment.Names.empty) root =
-  let mounts =
-    String.concat ""
-      (List.map
-         (fun name ->
-           "--mount=type=secret,id=" ^ name ^ ",env=" ^ name ^ ",required=true ")
-         (Environment.Names.elements secrets))
-  in
+let dockerfile root =
   let rendered = ref [] in
   let output = Buffer.create 1024 in
   Buffer.add_string output "# syntax=docker/dockerfile:1.19\n";
@@ -212,14 +179,12 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
         (match stage.base with
         | Native _ -> Buffer.add_string output "ARG TARGETARCH\n"
         | Image _ | Stage _ -> ());
-        if not (Environment.Names.is_empty secrets) then
-          Buffer.add_string output "ARG KILN_SECRETS_HASH\n";
         List.iter
           (fun line -> Buffer.add_string output (line ^ "\n"))
           operations;
         name
   and operation = function
-    | Run args -> "RUN " ^ mounts ^ json (arguments args)
+    | Run args -> "RUN " ^ json (arguments args)
     | Copy { input; paths; exclude; destination; owner } ->
         let prefix =
           match input with
@@ -248,28 +213,9 @@ let dockerfile ?(secrets = Environment.Names.empty) root =
                (fun (key, value) -> key ^ "=" ^ docker_quote value)
                pairs)
     | User (u, g) -> Printf.sprintf "USER %d:%d" u g
-    | Entrypoint args ->
-        "ENTRYPOINT " ^ json (Option.fold ~none:[] ~some:arguments args)
+    | Entrypoint -> "ENTRYPOINT []"
     | Start args -> "CMD " ^ json (Option.fold ~none:[] ~some:arguments args)
     | Prepend_path path -> "ENV PATH=" ^ docker_quote path ^ ":\"${PATH}\""
-    | Write { path; contents; mode } ->
-        let encoded =
-          String.to_seq contents
-          |> Seq.map (fun c -> Printf.sprintf "\\0%03o" (Char.code c))
-          |> List.of_seq |> String.concat ""
-        in
-        "RUN "
-        ^ json
-            [
-              "/bin/sh";
-              "-c";
-              "mkdir -p -- \"$(dirname -- \"$1\")\" && printf '%b' \"$2\" > \
-               \"$1\" && chmod -- \"$3\" \"$1\"";
-              "kiln-file";
-              path;
-              encoded;
-              Printf.sprintf "%o" mode;
-            ]
   in
   ignore (name root);
   Buffer.contents output

@@ -1,4 +1,3 @@
-module Planner = Kiln_planning.Planner
 module Error = Kiln_planning.Error
 module Build_plan = Kiln_planning.Build_plan
 module Provider = Kiln_planning.Provider
@@ -9,7 +8,10 @@ let providers : Provider.t list = [ (module Kiln_providers.Node) ]
 let base = {|{"main":"main.js"}|}
 let snapshot = snapshot [ ("package.json", base) ]
 let run root extras = Kiln_io.Driver.plan ~providers (request root extras)
-let result root extras = ok (prepare ~providers root extras)
+
+let result root extras =
+  Build_plan.dockerfile (ok (prepare ~providers root extras))
+
 let release pin = pin.Pins.node.Pins.release
 
 let default_pin =
@@ -23,21 +25,16 @@ let oldest_major =
   let line = major (release oldest_pin) in
   last (List.filter (fun pin -> major (release pin) = line) Pins.node)
 
-let selected field response =
-  Yojson.Basic.Util.(
-    response.Planner.resolution |> member "data" |> member field |> to_string)
+let images pin dockerfile =
+  contains dockerfile pin.Pins.node.Pins.builder
+  && contains dockerfile pin.Pins.node.Pins.runtime
 
-let startup response =
-  Option.map Build_plan.arguments (Build_plan.startup response.Planner.plan)
-
-let runs command response =
+let runs command dockerfile =
   let argv =
     Kiln_planning.Json.string_array (String.split_on_char ' ' command)
   in
   let prefix = String.drop_last 1 (Kiln_planning.Json.encode argv) in
-  contains (Build_plan.dockerfile response.Planner.plan) ("RUN " ^ prefix)
-
-let uses_node version response = selected "nodeVersion" response = version
+  contains dockerfile ("RUN " ^ prefix)
 
 let failure expected = function
   | Ok response -> failwith ("expected failure: " ^ response)
@@ -59,22 +56,7 @@ let workspace root =
 
 let () =
   snapshot "default npm plan" (fun root ->
-      let plan = result root [] in
-      check "default LTS" (uses_node (release default_pin) plan);
-      check "bundled npm"
-        (selected "packageManager" plan = "npm"
-        && selected "packageManagerVersion" plan = default_pin.Pins.npm);
-      let open Yojson.Basic.Util in
-      List.iter
-        (fun (name, source) ->
-          let package = package plan name in
-          check
-            (name ^ " default provenance")
-            (member "name" package = `String name
-            && member "requestedVersion" package = `Null
-            && member "source" package = `String source))
-        [ ("node", "kiln default"); ("npm", "bundled with Node") ];
-      let dockerfile = Build_plan.dockerfile plan.Planner.plan in
+      let dockerfile = result root [] in
       let position text =
         match String.find_first ~sub:text dockerfile with
         | Some index -> index
@@ -86,26 +68,13 @@ let () =
       check "the emulated fallback and the source copy follow"
         (position {|--ignore-scripts|} < position {|"npm","install"]|}
         && position {|"npm","install"]|} < position {|COPY --exclude|});
-      check "the plan names the install path"
-        (`Assoc (Planner.info plan)
-        |> member "metadata" |> member "dependencyInstall"
-        = `String "native, emulated if a package has an install script");
-      check "main startup" (startup plan = Some [ "node"; "main.js" ]));
+      check "main startup" (contains dockerfile {|CMD ["node","main.js"]|}));
   List.iter
     (fun (label, pkg) ->
       snapshot label (fun root ->
           write root "package.json" pkg;
-          let plan = result root [] in
           check "installs on the target platform"
-            (not
-               (contains
-                  (Build_plan.dockerfile plan.Planner.plan)
-                  "$BUILDPLATFORM"));
-          check "the plan names the install path"
-            Yojson.Basic.Util.(
-              `Assoc (Planner.info plan)
-              |> member "metadata" |> member "dependencyInstall"
-              = `String "emulated")))
+            (not (contains (result root []) "$BUILDPLATFORM"))))
     [
       ( "root install script stays under emulation",
         {|{"main":"main.js","scripts":{"postinstall":"true"}}|} );
@@ -116,11 +85,7 @@ let () =
     ];
   snapshot "a major selects its pin and images" (fun root ->
       write root ".nvmrc" (major (release oldest_pin));
-      let plan = result root [] in
-      check "pin" (uses_node (release oldest_major) plan);
-      check "images"
-        (selected "builderImage" plan = oldest_major.Pins.node.Pins.builder
-        && selected "runtimeImage" plan = oldest_major.Pins.node.Pins.runtime));
+      check "images" (images oldest_major (result root [])));
   (let npm = (List.hd Pins.npm).Pins.tool in
    snapshot "devEngines select the runtime and a pinned manager" (fun root ->
        write root "package.json"
@@ -128,11 +93,9 @@ let () =
             {|{"main":"main.js","devEngines":{"runtime":{"name":"node","version":"^%s"},"packageManager":[{"name":"npm","version":"%s"}]}}|}
             (major (release oldest_pin))
             (major npm));
-       let plan = result root [] in
-       check "runtime" (uses_node (release oldest_major) plan);
-       check "manager"
-         (selected "packageManager" plan = "npm"
-         && selected "packageManagerVersion" plan = npm)));
+       let dockerfile = result root [] in
+       check "runtime" (images oldest_major dockerfile);
+       check "manager" (runs ("npm install --global npm@" ^ npm) dockerfile)));
 
   (* Shared request and package validation. *)
   snapshot "version declarations must intersect" (fun root ->
@@ -192,10 +155,10 @@ let () =
   (* Workspace configuration, startup, and lockfile handling. *)
   snapshot "workspace manifests and lockfile" (fun root ->
       workspace root;
-      let plan = result root [] in
-      check "a workspace selects pnpm" (selected "packageManager" plan = "pnpm");
-      check "build script executed" (runs "pnpm run build" plan);
-      check "manager startup" (startup plan = Some [ "pnpm"; "run"; "start" ]);
+      let dockerfile = result root [] in
+      check "build script executed" (runs "pnpm run build" dockerfile);
+      check "manager startup"
+        (contains dockerfile {|CMD ["pnpm","run","start"]|});
       write root "pnpm-lock.yaml" "lockfileVersion: '9.0'\n";
       check "lockfile freezes installation"
         (runs "pnpm install --frozen-lockfile" (result root [])));
@@ -216,19 +179,16 @@ let () =
         ("exact " ^ manager ^ "@" ^ version)
         (fun root ->
           write root "package.json" (package_json "");
-          let plan = result root [] in
-          check "the declared version passes through"
-            (selected "packageManagerVersion" plan = version);
           check "only a manager Node doesn't bundle is installed"
-            (runs ("npm install --global " ^ manager ^ "@" ^ version) plan
+            (runs
+               ("npm install --global " ^ manager ^ "@" ^ version)
+               (result root [])
             = (manager <> "npm"));
           let hex =
             "3ed639f09cd3ea741e752c5bd225635c916fee2c9452baf1e93deb17358edb72"
           in
           write root "package.json" (package_json ("+sha256." ^ hex));
-          let dockerfile =
-            Build_plan.dockerfile (result root []).Planner.plan
-          in
+          let dockerfile = result root [] in
           check "the build verifies an integrity-qualified manager"
             (contains dockerfile (hex ^ "  /tmp/kiln-manager.tgz")
             && contains dockerfile "sha256sum -c")))

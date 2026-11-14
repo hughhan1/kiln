@@ -10,8 +10,8 @@ let paths commands =
       | Inherit
       | Operation
           ( Build_plan.Run _ | Build_plan.Copy _ | Build_plan.Workdir _
-          | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint _
-          | Build_plan.Start _ | Build_plan.Write _ ) ->
+          | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint
+          | Build_plan.Start _ ) ->
           None)
     commands
 
@@ -21,10 +21,6 @@ let expand commands inherited =
   List.concat_map
     (function Inherit -> inherited | Operation command -> [ command ])
     commands
-
-let shell text =
-  let+ argv = Build_plan.shell text in
-  [ Operation (Build_plan.Run argv) ]
 
 let words text =
   let open Angstrom in
@@ -47,14 +43,6 @@ let words text =
        (skip_while whitespace *> many (word <* skip_while whitespace))
        text)
 
-let write ~assets ~mode path name =
-  let+ contents =
-    Option.to_result
-      ~none:(Error.Metadata ("asset", "not found: " ^ name))
-      (List.assoc_opt name assets)
-  in
-  Operation (Build_plan.Write { path; contents; mode })
-
 let copy input src dest =
   Operation
     (Build_plan.Copy
@@ -66,7 +54,7 @@ let copy input src dest =
          owner = None;
        })
 
-let operation ~assets fields =
+let operation fields =
   let open Json in
   let* _ = field "customName" (optional string) fields in
   let keys =
@@ -86,18 +74,6 @@ let operation ~assets fields =
   | [ "path" ] ->
       let+ path = field "path" string fields in
       Operation (Build_plan.Prepend_path path)
-  | [ "name"; "path" ] | [ "mode"; "name"; "path" ] ->
-      let* path = field "path" string fields in
-      let* name = field "name" string fields in
-      let* mode =
-        field "mode"
-          (default 0o644 (fun label -> function
-            | `Int 0 -> Ok 0o644
-            | `Int mode -> Ok mode
-            | _ -> metadata label "expected integer"))
-          fields
-      in
-      write ~assets ~mode path name
   | [ "dest"; "src" ] | [ "dest"; "image"; "src" ] ->
       let* src = field "src" string fields in
       let* dest = field "dest" string fields in
@@ -108,16 +84,9 @@ let operation ~assets fields =
         | image -> Build_plan.external_image image
       in
       copy input src dest
-  | _ ->
-      metadata "command" "expected exactly one RUN, PATH, FILE, or COPY object"
+  | _ -> metadata "command" "expected exactly one RUN, PATH or COPY object"
 
-let pair build payload =
-  let* parts = words payload in
-  match parts with
-  | [ first; second ] -> build first second
-  | _ -> Json.metadata "command" "expected two COPY or FILE arguments"
-
-let string_command ~assets text =
+let string_command text =
   let shell text =
     match text with
     | "..." -> Ok Inherit
@@ -130,20 +99,24 @@ let string_command ~assets text =
       match String.take_first_while (( <> ) '#') prefix with
       | "RUN" -> shell payload
       | "PATH" -> Ok (Operation (Build_plan.Prepend_path payload))
-      | "COPY" ->
-          pair (fun src dest -> Ok (copy Build_plan.Context src dest)) payload
-      | "FILE" -> pair (write ~assets ~mode:0o644) payload
+      | "COPY" -> (
+          let* parts = words payload in
+          match parts with
+          | [ src; dest ] -> Ok (copy Build_plan.Context src dest)
+          | _ -> Json.metadata "command" "expected two COPY arguments")
       | _ -> shell text)
   | None -> shell text
 
-let decode ~assets label value =
+let decode label value =
   let command label = function
-    | `String text -> string_command ~assets text
+    | `String text -> string_command text
     | value ->
         let* fields = Json.object_ label value in
-        operation ~assets fields
+        operation fields
   in
   let* commands = Json.list command label value in
   let operations = expand commands [] in
   let+ () = Build_plan.validate_operations operations in
   commands
+
+let default = [ Inherit ]

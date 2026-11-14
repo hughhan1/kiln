@@ -6,7 +6,7 @@ val prepare :
   ?providers:Kiln_planning.Provider.t list ->
   ?cancelled:(unit -> bool) ->
   (string * Yojson.Basic.t) list ->
-  (Kiln_planning.Planner.prepared, Kiln_planning.Error.t) result
+  (Kiln_planning.Build_plan.t, Kiln_planning.Error.t) result
 (** Prepare the request object's fields from the source tree and the pinned
     toolchains alone, with optional providers and cancellation. No external
     runtime executable is used for detection. *)

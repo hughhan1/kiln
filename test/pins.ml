@@ -1,71 +1,82 @@
+module Build_plan = Kiln_planning.Build_plan
 module Pins = Kiln_providers.Pins
 open Contract_support
 
-let images pins = List.map (fun pin -> pin.Pins.version) pins
-let nodes = List.map (fun pin -> pin.Pins.node.Pins.release) Pins.node
+let images pins = List.map (fun pin -> (pin.Pins.version, pin.Pins.image)) pins
+
+let toolchains pins =
+  List.map (fun pin -> (pin.Pins.release, pin.Pins.runtime)) pins
+
+let nodes = toolchains (List.map (fun pin -> pin.Pins.node) Pins.node)
+let oldest_go = List.hd Pins.golang
 
 let default_node =
-  last
-    (List.filter_map
-       (fun pin ->
-         Option.map (fun _ -> pin.Pins.node.Pins.release) pin.Pins.lts)
-       Pins.node)
+  (last (List.filter (fun pin -> Option.is_some pin.Pins.lts) Pins.node))
+    .Pins.node
+    .Pins.runtime
 
 let () =
   List.iter
-    (fun (name, files, pins, default) ->
+    (fun (name, files, request, pins, default) ->
       snapshot files (name ^ " selects from its pins") (fun root ->
-          let resolved fields =
-            Yojson.Basic.Util.member "resolvedVersion"
-              (package (ok (prepare root fields)) name)
-          in
           let requesting version =
-            [
-              ( "environment",
-                `Assoc
-                  [
-                    ( "RAILPACK_" ^ String.uppercase_ascii name ^ "_VERSION",
-                      `String version );
-                  ] );
-            ]
+            List.iter
+              (fun (file, bytes) -> write root file bytes)
+              (request version);
+            prepare root []
           in
-          check "default" (resolved [] = `String default);
+          let selects image prepared =
+            contains (Build_plan.dockerfile (ok prepared)) image
+          in
+          check "default" (selects default (prepare root []));
           List.iter
-            (fun pin ->
+            (fun (version, image) ->
               check
-                ("every pin plans: " ^ pin)
-                (resolved (requesting pin) = `String pin))
+                ("every pin plans: " ^ version)
+                (selects image (requesting version)))
             pins;
           check "an unsupported version lists what is supported"
-            (lists_supported (prepare root (requesting "0.0.1")) pins)))
+            (lists_supported (requesting "0.0.1") (List.map fst pins))))
     [
-      ("node", [ ("package.json", "{}") ], nodes, default_node);
+      ( "node",
+        [ ("package.json", "{}") ],
+        (fun version -> [ (".node-version", version) ]),
+        nodes,
+        default_node );
       ( "bun",
         [ ("package.json", "{}"); ("bun.lock", "") ],
+        (fun version -> [ (".bun-version", version) ]),
         images Pins.bun,
-        last (images Pins.bun) );
+        (last Pins.bun).Pins.image );
       ( "deno",
         [ ("deno.json", "{}") ],
+        (fun version -> [ (".deno-version", version) ]),
         images Pins.deno,
-        last (images Pins.deno) );
+        (last Pins.deno).Pins.image );
       ( "python",
         [ ("main.py", "") ],
-        List.map (fun pin -> pin.Pins.release) Pins.python,
-        (last Pins.python).Pins.release );
+        (fun version -> [ (".python-version", version) ]),
+        toolchains Pins.python,
+        (last Pins.python).Pins.runtime );
       ( "uv",
         [
           ("main.py", "");
           ("pyproject.toml", "[project]\nrequires-python='>=3.11'\n");
           ("uv.lock", "version=1\nrequires-python='>=3.11'\n");
         ],
+        (fun version ->
+          [ ("uv.toml", "required-version = '==" ^ version ^ "'\n") ]),
         images Pins.uv,
-        last (images Pins.uv) );
+        (last Pins.uv).Pins.image );
       ( "go",
-        [
-          ( "go.mod",
-            "module example\ngo " ^ (List.hd Pins.golang).Pins.version ^ "\n" );
-        ],
+        [ ("go.mod", "module example\ngo " ^ oldest_go.Pins.version ^ "\n") ],
+        (fun version ->
+          [
+            ( "go.mod",
+              "module example\ngo " ^ version ^ "\ntoolchain go" ^ version
+              ^ "\n" );
+          ]),
         images Pins.golang,
-        (List.hd Pins.golang).Pins.version );
+        oldest_go.Pins.image );
     ];
   finish ()

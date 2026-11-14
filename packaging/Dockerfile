@@ -9,6 +9,6 @@ WORKDIR /src
 COPY kiln_ocaml.opam* ./
 RUN opam install . --deps-only --locked --assume-depexts
 COPY . .
-RUN KILN_STATIC=1 scripts/package /out
+RUN scripts/package /out
 FROM scratch
 COPY --from=build /out/ /

@@ -47,11 +47,6 @@ let request root extras = Yojson.Basic.to_string (`Assoc (fields root extras))
 let prepare ?providers root extras =
   Kiln_io.Driver.prepare ?providers (fields root extras)
 
-let package prepared name =
-  Yojson.Basic.Util.(
-    `Assoc (Kiln_planning.Planner.info prepared)
-    |> member "resolvedPackages" |> member name)
-
 let failed = ref false
 
 let test label action =
@@ -70,19 +65,7 @@ let temporary action =
 
 let read path = In_channel.with_open_bin path In_channel.input_all
 
-let environment overrides =
-  Array.of_list
-    (List.map (fun (key, value) -> key ^ "=" ^ value) overrides
-    @ List.filter
-        (fun entry ->
-          not
-            (List.exists
-               (fun (key, _) -> String.starts_with ~prefix:(key ^ "=") entry)
-               overrides))
-        (Array.to_list (Unix.environment ())))
-
-let run ?(env = Unix.environment ()) ?(exit_code = 0) ?errors executable
-    arguments =
+let run ?(exit_code = 0) executable arguments =
   let args = executable :: arguments in
   temporary (fun root ->
       let stdout = Filename.concat root "stdout" in
@@ -90,8 +73,7 @@ let run ?(env = Unix.environment ()) ?(exit_code = 0) ?errors executable
       let pid =
         Out_channel.with_open_bin stdout (fun out ->
             Out_channel.with_open_bin stderr (fun err ->
-                Unix.create_process_env executable (Array.of_list args) env
-                  Unix.stdin
+                Unix.create_process executable (Array.of_list args) Unix.stdin
                   (Unix.descr_of_out_channel out)
                   (Unix.descr_of_out_channel err)))
       in
@@ -113,7 +95,6 @@ let run ?(env = Unix.environment ()) ?(exit_code = 0) ?errors executable
           ignore (Unix.waitpid [] pid);
           raise exn
       in
-      Option.iter (fun buffer -> Buffer.add_string buffer (read stderr)) errors;
       check
         (String.concat " " args ^ "\n" ^ read stdout ^ read stderr)
         (status = Unix.WEXITED exit_code);

@@ -86,11 +86,11 @@ let directory path =
     Ok (root, List.sort String.compare (Array.to_list (Sys.readdir root)))
 
 let planned cancelled providers ~requested root probe plan =
-  let* selection = Provider.select providers ~requested probe in
-  let (module P) = selection.Provider.provider in
+  let* provider = Provider.select providers ~requested probe in
+  let (module P : Provider.S) = provider in
   let exclude = Source.omitted @ P.exclude in
   let* files, links = walk cancelled exclude root "" in
-  let* planned = plan selection (source cancelled root exclude files links) in
+  let* planned = plan provider (source cancelled root exclude files links) in
   let+ () = check cancelled in
   planned
 
@@ -108,7 +108,7 @@ let prepare ?(providers = Kiln_providers.Builtin.all)
   let probe = source cancelled root [ ".git" ] files false in
   let* request = Request.configure request probe in
   planned cancelled providers ~requested:request.Request.provider root probe
-    (fun selection source -> Planner.prepare selection request source)
+    (fun provider source -> Planner.prepare provider request source)
 
 let develop providers cancelled path =
   filesystem @@ fun () ->
@@ -128,5 +128,5 @@ let plan ?(providers = Kiln_providers.Builtin.all)
     let* source = Json.field "source" Json.string fields in
     develop providers cancelled source
   else
-    let+ prepared = prepare ~providers ~cancelled fields in
-    Planner.encode prepared
+    let+ plan = prepare ~providers ~cancelled fields in
+    Planner.encode plan

@@ -9,47 +9,19 @@ for each release.
 
 > ⚠️ **Disclaimer:** This entire repository is vibe-coded.
 
-## Install
+## Use
 
-```sh
-curl -LsSf https://github.com/hughhan1/kiln/releases/latest/download/install.sh | sh
+Kiln is a library. Link the C SDK that `scripts/package PREFIX` builds
+(`ffi/kiln.h`, `libkiln.a`, `kiln.pc`) and pass `kiln_plan` a JSON request:
+
+```json
+{"source": "/abs/app", "start": ["node", "server.js"]}
 ```
 
-## CLI
-
-### Prepare a Dockerfile
-
-Inspect an application and select its toolchain.
-
-```sh
-kiln prepare . --plan-out /tmp/Dockerfile --info-out /tmp/kiln-info.json
-kiln prepare . --show-plan --hide-pretty-plan
-```
-
-<details open>
-<summary><code>kiln prepare --help</code></summary>
-
-Usage and options, abridged:
-
-```text
-Usage: kiln prepare [OPTIONS] DIRECTORY
-
---plan-out FILE         Write the Dockerfile
---info-out FILE         Write JSON result metadata
---show-plan             Print the Dockerfile
---hide-pretty-plan      Suppress the preparation summary
---provider NAME         Select an application provider
---build-cmd COMMAND     Override the build shell command
---start-cmd COMMAND     Override the startup shell command
---start-arg ARG         Startup argv element; repeat in order
---error-missing-start   Require a startup command
---config-file FILE      Application configuration (default: railpack.json)
---help[=FMT], -h        Show help (auto, pager, groff, or plain)
-```
-
-</details>
-
-## Libraries
-
-The C and OCaml APIs prepare build recipes in-process. Run the returned
-Dockerfile with BuildKit.
+A request names its `source` and may set `start` and `configFilePath` (default
+`railpack.json`). It returns `{"dockerfile": "..."}` to build with BuildKit. A
+request with `"development": true` names only its `source` and returns what a
+development environment runs, `{"install": [...], "build": [...]}`, each an
+array of argument vectors. A failure returns `{"error": "..."}`. An app's
+`railpack.json` may select its `provider` and its `steps.install` and
+`steps.build` commands.

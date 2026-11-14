@@ -1,4 +1,5 @@
 module Build_plan = Kiln_planning.Build_plan
+module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
 module Provider = Kiln_planning.Provider
@@ -41,7 +42,6 @@ let node_request text =
       Range r
 
 type resolution = {
-  node : Semver.version;
   pm : manager;
   pm_version : Semver.version;
   manager_install : Build_plan.argv option;
@@ -76,8 +76,8 @@ type inputs = Whole_source | Manifests of string list
 
 type application = {
   nodes : node_request list;
-  node_declarations : Package.requirement list;
-  manager_declarations : Package.requirement list;
+  node_declarations : string list;
+  manager_declarations : string list;
   manager_ranges : Semver.range list;
   integrity : Javascript.integrity option;
   manager : manager;
@@ -149,7 +149,7 @@ let load (request : Request.t) source =
     Support.traverse
       (fun path ->
         let+ version = Source.version source path in
-        Package.optional path version)
+        Option.to_list version)
       [ ".node-version"; ".nvmrc" ]
   in
   let* workspace =
@@ -171,24 +171,17 @@ let load (request : Request.t) source =
     else Error (Error.Unsupported "only Node runtime is supported")
   in
   let node_declarations =
-    Request.defaults request "node"
-      (List.concat versions
-      @ Package.optional "package.json engines.node"
-          (List.assoc_opt "node" pkg.Javascript.engines)
-      @ Javascript.requests ~path:"package.json" pkg.Javascript.runtimes)
+    List.concat versions
+    @ Option.to_list (List.assoc_opt "node" pkg.Javascript.engines)
+    @ Javascript.requests pkg.Javascript.runtimes
   in
-  let nodes_text = Package.versions node_declarations in
-  let* nodes = Support.traverse node_request nodes_text in
+  let* nodes = Support.traverse node_request node_declarations in
   let* pm = selected_manager pkg source in
-  let manager_declarations =
-    Request.defaults request (name pm)
-      (Javascript.requests ~path:"package.json" pkg.Javascript.managers)
-  in
-  let manager_text = Package.versions manager_declarations in
-  let* manager_ranges = Support.traverse parse_range manager_text in
+  let manager_declarations = Javascript.requests pkg.Javascript.managers in
+  let* manager_ranges = Support.traverse parse_range manager_declarations in
   let* build_argv = Build_plan.argv [ name pm; "run"; "build" ] in
   let* command =
-    Javascript.startup pkg ~override:(Request.start request)
+    Javascript.startup pkg ~override:request.Request.start
       ~script:[ name pm; "run"; "start" ]
       ~main:[ "node" ]
   in
@@ -197,7 +190,7 @@ let load (request : Request.t) source =
     else install_inputs source workspace packages
   in
   let+ install =
-    Request.install_command request
+    Build_plan.argv
       ([ name pm; "install" ]
       @
       match pm with
@@ -213,10 +206,10 @@ let load (request : Request.t) source =
     integrity = pkg.Javascript.declared_integrity;
     manager = pm;
     install;
-    install_commands = Request.install_commands request;
+    install_commands = Commands.expand request.Request.install_steps;
     inputs;
     build =
-      Request.build_command request
+      Commands.expand request.Request.build
         (if Javascript.has_script pkg "build" then [ Build_plan.Run build_argv ]
          else []);
     command;
@@ -244,9 +237,10 @@ let select_manager app node =
   let allowed version =
     List.for_all (fun range -> Semver.matches range version) app.manager_ranges
   in
-  let declared = Package.versions app.manager_declarations in
   match
-    List.find_map (fun text -> Result.to_option (Semver.version text)) declared
+    List.find_map
+      (fun text -> Result.to_option (Semver.version text))
+      app.manager_declarations
   with
   | Some version when allowed version -> Ok version
   | Some _ | None ->
@@ -260,13 +254,7 @@ let select_manager app node =
       let+ version, _ =
         Package.select ~tool:(name app.manager)
           ~declarations:
-            (app.manager_declarations
-            @ [
-                {
-                  Package.source = "Node";
-                  version = "Node " ^ Semver.show node;
-                };
-              ])
+            (app.manager_declarations @ [ "Node " ^ Semver.show node ])
           ~version:fst ~parse:parse_version
           ~accept:(fun version (_, engines) ->
             allowed version && Semver.matches engines node)
@@ -317,7 +305,7 @@ let resolve app =
         in
         Some command
   in
-  { node; pm; pm_version; manager_install; builder; runtime }
+  { pm; pm_version; manager_install; builder; runtime }
 
 let id = "node"
 let public_name = id
@@ -346,27 +334,23 @@ else
 fi|}
 
 let manager_env r =
-  let open Build_plan in
   match r.pm with
-  | Npm -> Ok []
+  | Npm -> []
   | Pnpm ->
-      let+ env =
-        environment
+      [
+        Build_plan.Env
           [
             ("npm_config_manage_package_manager_versions", "false");
             ("npm_config_package_manager_strict_version", "false");
             ("npm_config_pm_on_fail", "ignore");
-          ]
-      in
-      [ Env env ]
+          ];
+      ]
 
 let toolchain r from =
   let open Build_plan in
-  let* manager_env = manager_env r in
-  let* ci_env = environment [ ("CI", "true") ] in
   stage from
-    ([ Workdir "/app"; Env ci_env ]
-    @ manager_env
+    ([ Workdir "/app"; Env [ ("CI", "true") ] ]
+    @ manager_env r
     @ List.map (fun command -> Run command) (Option.to_list r.manager_install))
 
 (* Run each command unless the shell [test] succeeds. *)
@@ -380,8 +364,8 @@ let unless test =
             @ arguments command)
         in
         Run command
-    | ( Copy _ | Workdir _ | Env _ | User _ | Entrypoint _ | Start _
-      | Prepend_path _ | Write _ ) as operation ->
+    | ( Copy _ | Workdir _ | Env _ | User _ | Entrypoint | Start _
+      | Prepend_path _ ) as operation ->
         Ok operation)
 
 let install_steps app copy_source =
@@ -395,11 +379,6 @@ let install_steps app copy_source =
 let plan app r =
   let open Build_plan in
   let pm = name r.pm in
-  let* manager_env = manager_env r in
-  let* runtime_env =
-    environment
-      [ ("NODE_ENV", "production"); ("HOME", "/tmp"); ("PORT", "8080") ]
-  in
   let* builder = toolchain r (Image r.builder) in
   let copy_source = Source.copy ~exclude [ "." ] "." in
   let* steps =
@@ -417,8 +396,11 @@ let plan app r =
   in
   let* build = stage (Stage builder) (steps @ app.build) in
   stage (Image r.runtime)
-    ([ Workdir "/app"; Env runtime_env ]
-    @ manager_env
+    ([
+       Workdir "/app";
+       Env [ ("NODE_ENV", "production"); ("HOME", "/tmp"); ("PORT", "8080") ];
+     ]
+    @ manager_env r
     @ Option.fold ~none:[]
         ~some:(fun _ ->
           [
@@ -456,43 +438,7 @@ let detect source =
 let prepare request source =
   let* app = load request source in
   let* r = resolve app in
-  let+ plan = plan app r in
-  {
-    Provider.plan;
-    packages =
-      [
-        Package.resolve "node" app.node_declarations (Semver.show r.node);
-        Package.resolve
-          ~default_source:
-            (match r.pm with
-            | Npm -> "bundled with Node"
-            | Pnpm -> "kiln default")
-          (name r.pm) app.manager_declarations (Semver.show r.pm_version);
-      ];
-    metadata =
-      [
-        ( "dependencyInstall",
-          if native app r then
-            "native, emulated if a package has an install script"
-          else "emulated" );
-        ("nodeRuntime", "node");
-        ("nodePackageManager", name app.manager);
-      ];
-    resolution =
-      `Assoc
-        [
-          ("nodeVersion", `String (Semver.show r.node));
-          ("packageManager", `String (name r.pm));
-          ("packageManagerVersion", `String (Semver.show r.pm_version));
-          ( "packageManagerInstall",
-            match r.manager_install with
-            | None -> `Null
-            | Some command -> Json.string_array (Build_plan.arguments command)
-          );
-          ("builderImage", `String (Build_plan.image_ref r.builder));
-          ("runtimeImage", `String (Build_plan.image_ref r.runtime));
-        ];
-  }
+  plan app r
 
 let develop source =
   if not (Source.has source "package.json") then

@@ -1,6 +1,6 @@
 module Build_plan = Kiln_planning.Build_plan
+module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
-module Package = Kiln_planning.Package
 module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
@@ -75,19 +75,13 @@ let prepare request source =
         Semver.show version
     | Some _ -> Json.metadata "go.mod" "unsupported Go toolchain"
   in
-  let declarations =
-    Request.defaults request id
-      [ { Package.source = "go.mod"; version = selected } ]
-  in
-  let* requirements = Semver_image.requirements declarations in
+  let* requirements = Semver_image.requirements [ selected ] in
   let* start =
-    match Request.start request with
+    match request.Request.start with
     | Some value -> Ok (Some value)
     | None -> Result.map Option.some (Build_plan.argv [ "/app/bin/server" ])
   in
-  let* install =
-    Request.install_command request [ "go"; "mod"; "download"; "all" ]
-  in
+  let* install = Build_plan.argv [ "go"; "mod"; "download"; "all" ] in
   let* frontend =
     Node.frontend ~exclude:([ "*.go"; "go.mod"; "go.sum" ] @ exclude) source
   in
@@ -104,43 +98,30 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
   in
   let open Build_plan in
   let* runtime = image Pins.debian in
-  let* env =
-    environment
-      [
-        ("CGO_ENABLED", "0");
-        ("GOTOOLCHAIN", "local");
-        ("GOFLAGS", "-mod=readonly");
-        ("GOWORK", "off");
-      ]
-  in
   let* builder =
-    stage
-      (Image (Semver_image.image compiler))
-      ([ Workdir "/app"; Env env; Source.copy ~exclude [ "." ] "/app/" ]
-      @ Request.install_commands request [ Run install ]
-      @ Request.build_command request (frontend @ [ Run build ]))
+    stage (Image compiler)
+      ([
+         Workdir "/app";
+         Env
+           [
+             ("CGO_ENABLED", "0");
+             ("GOTOOLCHAIN", "local");
+             ("GOFLAGS", "-mod=readonly");
+             ("GOWORK", "off");
+           ];
+         Source.copy ~exclude [ "." ] "/app/";
+       ]
+      @ Commands.expand request.Request.install_steps [ Run install ]
+      @ Commands.expand request.Request.build (frontend @ [ Run build ]))
   in
-  let+ plan =
-    stage (Image runtime)
-      [
-        Workdir "/app";
-        copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
-        copy builder
-          [ "/etc/ssl/certs/ca-certificates.crt" ]
-          "/etc/ssl/certs/ca-certificates.crt";
-        User (1000, 1000);
-        Entrypoint None;
-        Start start;
-      ]
-  in
-  {
-    Provider.plan;
-    packages = [ Semver_image.package id requirements compiler ];
-    metadata = [];
-    resolution =
-      `Assoc
-        [
-          ("compiler", Semver_image.encode compiler);
-          ("runtime", `String (image_ref runtime));
-        ];
-  }
+  stage (Image runtime)
+    [
+      Workdir "/app";
+      copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
+      copy builder
+        [ "/etc/ssl/certs/ca-certificates.crt" ]
+        "/etc/ssl/certs/ca-certificates.crt";
+      User (1000, 1000);
+      Entrypoint;
+      Start start;
+    ]

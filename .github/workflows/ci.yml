@@ -31,7 +31,6 @@ jobs:
             native:
               - '.github/**'
               - 'packaging/**'
-              - 'install.sh'
               - 'scripts/**'
               - 'ffi/**'
               - '*.opam*'
@@ -77,7 +76,7 @@ jobs:
       - name: Check packaged C SDK
         run: scripts/check-sdk dist
       - name: Archive package
-        run: tar -czf kiln-${{ matrix.target }}.tar.gz -C dist bin include lib
+        run: tar -czf kiln-${{ matrix.target }}.tar.gz -C dist include lib
       - uses: actions/upload-artifact@v7
         with:
           name: kiln-${{ matrix.target }}
@@ -104,7 +103,6 @@ jobs:
         run: |
           set -euo pipefail
           test "$VERSION" = "v$(sed -n 's/^version: "\(.*\)"/\1/p' kiln_ocaml.opam)"
-          cp install.sh release/
           cd release
           sha256sum kiln-*.tar.gz > checksums.txt
           gh release create "$VERSION" --verify-tag --title "Kiln $VERSION" --generate-notes ./*
