@@ -15,7 +15,6 @@ type output = {
   packages : Package.t list;
   metadata : (string * string) list;
   resolution : Yojson.Basic.t;
-  steps : (steps, Error.t) result option;
 }
 
 module type S = sig
@@ -24,6 +23,7 @@ module type S = sig
   val exclude : string list
   val detect : Source.t -> (detection, Error.t) result
   val prepare : Request.t -> Source.t -> (output, Error.t) result
+  val develop : Request.t -> Source.t -> (steps, Error.t) result
 end
 
 type t = (module S)

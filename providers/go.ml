@@ -44,6 +44,14 @@ let parse_version value =
     (fun message -> Error.Metadata ("go.mod", message))
     (Semver.version value)
 
+let develop request source =
+  let* page = Node.page source in
+  let+ go_run = Build_plan.argv [ "go"; "run"; "." ] in
+  {
+    page with
+    Provider.start = Some (Option.value (Request.start request) ~default:go_run);
+  }
+
 let prepare request source =
   let* () =
     if
@@ -85,10 +93,9 @@ let prepare request source =
   let* install =
     Request.install_command request [ "go"; "mod"; "download"; "all" ]
   in
-  let* frontend, page =
+  let* frontend =
     Node.frontend ~exclude:([ "*.go"; "go.mod"; "go.sum" ] @ exclude) source
   in
-  let* go_run = Build_plan.argv [ "go"; "run"; "." ] in
   let* build =
     Build_plan.shell
       {|test "$(go list -mod=readonly -f '{{.Name}}' .)" = main || { echo 'Go applications require one executable root package' >&2; exit 1; }
@@ -133,14 +140,6 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
   in
   {
     Provider.plan;
-    steps =
-      Some
-        (Ok
-           {
-             page with
-             Provider.start =
-               Some (Option.value (Request.start request) ~default:go_run);
-           });
     packages = [ Semver_image.package id requirements compiler ];
     metadata = [];
     resolution =

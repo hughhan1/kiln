@@ -70,7 +70,6 @@ type application = {
   native : string list option;
   installable : bool;
   start : Build_plan.argv option;
-  build : Build_plan.operation list;
   development : (Provider.steps, Kiln_planning.Error.t) result;
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   install_override : Build_plan.argv option;
@@ -458,7 +457,7 @@ let load request source =
         (Whole_source | Manifests _) ) ->
         None
   in
-  let* frontend, page = Node.frontend ~exclude:(manifests @ exclude) source in
+  let* page = Node.page source in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
   in
@@ -512,7 +511,6 @@ let load request source =
       start;
       install_override = request.Request.install;
       install_commands = Request.install_commands request;
-      build = Request.build_command request frontend;
       development;
     }
 
@@ -608,7 +606,7 @@ let overlay_project = "cp -R /opt/kiln-project/. /opt/venv/"
 let compile_venv =
   Build_plan.shell "python -m compileall -qq -j 0 /opt/venv || true"
 
-let plan app resolved =
+let plan app resolved build =
   let open Build_plan in
   let* setup, defaults, manager_environment =
     match app.install with
@@ -721,7 +719,7 @@ let plan app resolved =
           stage (Image resolved.builder)
             ([ Workdir "/app"; Env env; venv ]
             @ (copy_source :: app.install_commands (setup @ commands @ compile))
-            @ app.build)
+            @ build)
         in
         (builder, builder, finish)
     | Manifests paths ->
@@ -798,7 +796,7 @@ let plan app resolved =
         in
         let+ build =
           stage (Stage dependencies)
-            (Source.copy ~exclude [ "." ] "/app/" :: (finish @ app.build))
+            (Source.copy ~exclude [ "." ] "/app/" :: (finish @ build))
         in
         (dependencies, build, finish)
   in
@@ -844,10 +842,15 @@ let plan app resolved =
         Start app.start;
       ])
 
+let develop request source =
+  let* app = load request source in
+  app.development
+
 let prepare request source =
   let* app = load request source in
   let* r = resolve app in
-  let+ plan = plan app r in
+  let* frontend = Node.frontend ~exclude:(manifests @ exclude) source in
+  let+ plan = plan app r (Request.build_command request frontend) in
   let installer, packages, installer_fields =
     match app.install with
     | Pip_install _ -> ("pip", [], [])
@@ -868,7 +871,6 @@ let prepare request source =
   in
   {
     Provider.plan;
-    steps = Some app.development;
     packages =
       Package.resolve "python" app.python_declarations (Version.show r.python)
       :: packages;

@@ -89,6 +89,9 @@ let config source path =
   let+ tasks = Json.field "tasks" (Json.default [] (Json.assoc task)) fields in
   (fields, tasks)
 
+let develop _ _ =
+  Error (Kiln_planning.Error.Unsupported ("development with " ^ id))
+
 let prepare request source =
   let* path =
     match List.filter (Source.has source) configs with
@@ -203,7 +206,6 @@ let prepare request source =
   in
   {
     Provider.plan;
-    steps = None;
     packages = [ Semver_image.package id requirements resolved ];
     metadata = [];
     resolution = Semver_image.encode resolved;

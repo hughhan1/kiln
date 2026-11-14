@@ -6,11 +6,14 @@ include Kiln_planning.Provider.S
 val frontend :
   exclude:string list ->
   Kiln_planning.Source.t ->
-  ( Kiln_planning.Build_plan.operation list * Kiln_planning.Provider.steps,
-    Kiln_planning.Error.t )
-  result
+  (Kiln_planning.Build_plan.operation list, Kiln_planning.Error.t) result
 (** Copy the output of a root package.json [build] script into another
     provider's build stage; nothing without one. The install, from the manifests
     before the source unless it needs the source, and the build run on the build
-    platform. The output omits node_modules. Also return the steps a development
-    environment runs for the page. *)
+    platform. The output omits node_modules. *)
+
+val page :
+  Kiln_planning.Source.t ->
+  (Kiln_planning.Provider.steps, Kiln_planning.Error.t) result
+(** The install and build a development environment runs for that root
+    package.json; nothing without a [build] script. *)

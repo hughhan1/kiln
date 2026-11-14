@@ -22,9 +22,6 @@ type output = {
       *)
   metadata : (string * string) list;
   resolution : Yojson.Basic.t;  (** The selected toolchain pins. *)
-  steps : (steps, Error.t) result option;
-      (** What a development environment runs, or why this app has no
-          development steps; [None] when the provider has none. *)
 }
 
 module type S = sig
@@ -45,6 +42,10 @@ module type S = sig
   val prepare : Request.t -> Source.t -> (output, Error.t) result
   (** Parse manifests and request overrides, select immutable toolchain pins,
       and generate a validated plan, failing in that order. *)
+
+  val develop : Request.t -> Source.t -> (steps, Error.t) result
+  (** Parse manifests and request overrides into what a development environment
+      runs, without selecting toolchain pins or planning an image. *)
 end
 
 type t = (module S)

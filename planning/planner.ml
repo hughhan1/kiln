@@ -12,11 +12,7 @@ type prepared = {
 let argv command = Json.string_array (Build_plan.arguments command)
 
 let develop { Provider.provider = (module P); _ } request source =
-  let* output = P.prepare request source in
-  let+ { Provider.inputs; install; build; start } =
-    Option.value output.Provider.steps
-      ~default:(Error (Error.Unsupported ("development with " ^ P.id)))
-  in
+  let+ { Provider.inputs; install; build; start } = P.develop request source in
   Json.encode
   @@ `Assoc
        [

@@ -377,6 +377,16 @@ let () =
         Some
           {|{"inputs":["pyproject.toml","uv.lock","package-lock.json","package.json"],"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]],"start":["uv","run","--no-sync","python","-m","holon.serve","server.py"]}|}
       );
+      ( "an image Kiln cannot plan",
+        [
+          ( "package.json",
+            {|{"engines":{"node":">=99"},"scripts":{"start":"node server.js"}}|}
+          );
+        ],
+        [],
+        Some
+          {|{"inputs":["package.json"],"install":[["npm","install"]],"build":[],"start":["npm","run","start"]}|}
+      );
       ("Python without uv.lock", python, serve, None);
       ( "Go with a page",
         [ ("go.mod", "module example\ngo 1.27\n"); ("package.json", page) ],

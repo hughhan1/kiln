@@ -467,7 +467,6 @@ let prepare request source =
   let+ plan = plan app r in
   {
     Provider.plan;
-    steps = Some (Ok app.development);
     packages =
       [
         Package.resolve "node" app.node_declarations (Semver.show r.node);
@@ -503,25 +502,35 @@ let prepare request source =
         ];
   }
 
-let frontend ~exclude source =
-  let none =
-    ( [],
-      { Provider.inputs = Manifests []; install = []; build = []; start = None }
-    )
-  in
-  if not (Source.has source "package.json") then Ok none
+let develop request source =
+  let+ app = load request source in
+  app.development
+
+let page_app source =
+  if not (Source.has source "package.json") then Ok None
   else
     let* request = Request.decode [ ("source", `String "") ] in
-    let* app = load request source in
-    match app.build with
-    | [] -> Ok none
-    | _ :: _ ->
-        let open Build_plan in
-        let* r = resolve app in
-        let* base = toolchain r (Native r.builder) in
-        let+ output =
-          stage (Stage base)
-            (install_steps app (Source.copy ~exclude [ "." ] ".") @ app.build)
-        in
-        ( [ copy ~exclude:[ "**/node_modules" ] output [ "/app/" ] "/app/" ],
-          app.development )
+    let+ app = load request source in
+    match app.build with [] -> None | _ :: _ -> Some app
+
+let page source =
+  let+ app = page_app source in
+  Option.fold
+    ~none:
+      { Provider.inputs = Manifests []; install = []; build = []; start = None }
+    ~some:(fun app -> app.development)
+    app
+
+let frontend ~exclude source =
+  let* app = page_app source in
+  match app with
+  | None -> Ok []
+  | Some app ->
+      let open Build_plan in
+      let* r = resolve app in
+      let* base = toolchain r (Native r.builder) in
+      let+ output =
+        stage (Stage base)
+          (install_steps app (Source.copy ~exclude [ "." ] ".") @ app.build)
+      in
+      [ copy ~exclude:[ "**/node_modules" ] output [ "/app/" ] "/app/" ]

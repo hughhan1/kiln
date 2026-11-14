@@ -26,6 +26,9 @@ let detect source =
     then Provider.Explicit
     else Provider.No_match
 
+let develop _ _ =
+  Error (Kiln_planning.Error.Unsupported ("development with " ^ id))
+
 let prepare request source =
   let* packages = Javascript.load source in
   let* root =
@@ -97,7 +100,6 @@ let prepare request source =
   in
   {
     Provider.plan;
-    steps = None;
     packages = [ Semver_image.package id requirements resolved ];
     metadata = [ ("nodeRuntime", "bun"); ("nodePackageManager", "bun") ];
     resolution = Semver_image.encode resolved;
