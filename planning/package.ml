@@ -1,12 +1,5 @@
 open Result.Syntax
 
-type requirement = { version : string; source : string }
-
-let optional source version =
-  Option.to_list (Option.map (fun version -> { source; version }) version)
-
-let versions requirements = List.map (fun r -> r.version) requirements
-
 let select ~tool ~declarations ~version ~parse ~accept rows =
   let* candidates =
     Support.traverse
@@ -21,6 +14,6 @@ let select ~tool ~declarations ~version ~parse ~accept rows =
          (Error.No_version
             {
               tool;
-              requirements = String.concat " && " (versions declarations);
+              requirements = String.concat " && " declarations;
               supported = List.map version rows;
             })

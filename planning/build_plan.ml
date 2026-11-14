@@ -34,20 +34,6 @@ let shell script =
     Error (Error.Metadata ("command", "expected nonempty shell command"))
   else argv [ "/bin/sh"; "-c"; script ]
 
-type environment = (string * string) list
-
-let environment pairs =
-  let valid (key, value) =
-    key <> ""
-    && String.for_all
-         (function
-           | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false)
-         key
-    && single_line value
-  in
-  if pairs <> [] && List.for_all valid pairs then Ok pairs
-  else Error (Error.Metadata ("environment", "invalid variable"))
-
 type image = string
 
 let image value =
@@ -84,9 +70,9 @@ and operation =
       owner : (int * int) option;
     }
   | Workdir of string
-  | Env of environment
+  | Env of (string * string) list
   | User of int * int
-  | Entrypoint of argv option
+  | Entrypoint
   | Start of argv option
   | Prepend_path of string
 
@@ -106,7 +92,7 @@ let validate_operations operations =
         && Option.fold ~none:true ~some:(fun (u, g) -> u >= 0 && g >= 0) owner
     | Workdir path | Prepend_path path -> path <> "" && single_line path
     | User (u, g) -> u >= 0 && g >= 0
-    | Run _ | Env _ | Entrypoint _ | Start _ -> true
+    | Run _ | Env _ | Entrypoint | Start _ -> true
   in
   if List.for_all valid operations then Ok ()
   else Error (Error.Metadata ("build plan", "invalid operation"))
@@ -134,7 +120,7 @@ let stages root =
           (fun seen -> function
             | Copy { input = Output stage; _ } -> visit seen stage
             | Copy { input = Context | External _; _ }
-            | Run _ | Workdir _ | Env _ | User _ | Entrypoint _ | Start _
+            | Run _ | Workdir _ | Env _ | User _ | Entrypoint | Start _
             | Prepend_path _ ->
                 seen)
           seen stage.operations
@@ -142,21 +128,6 @@ let stages root =
       stage :: seen
   in
   List.rev (visit [] root)
-
-let rec startup stage =
-  let inherited () =
-    match stage.base with
-    | Image _ | Native _ -> None
-    | Stage parent -> startup parent
-  in
-  let rec local fallback = function
-    | [] -> fallback ()
-    | Start args :: _ -> args
-    | Entrypoint _ :: rest -> local (fun () -> None) rest
-    | (Copy _ | Run _ | Workdir _ | Env _ | User _ | Prepend_path _) :: rest ->
-        local fallback rest
-  in
-  local inherited (List.rev stage.operations)
 
 let run args =
   let+ args = argv args in
@@ -242,8 +213,7 @@ let dockerfile root =
                (fun (key, value) -> key ^ "=" ^ docker_quote value)
                pairs)
     | User (u, g) -> Printf.sprintf "USER %d:%d" u g
-    | Entrypoint args ->
-        "ENTRYPOINT " ^ json (Option.fold ~none:[] ~some:arguments args)
+    | Entrypoint -> "ENTRYPOINT []"
     | Start args -> "CMD " ^ json (Option.fold ~none:[] ~some:arguments args)
     | Prepend_path path -> "ENV PATH=" ^ docker_quote path ^ ":\"${PATH}\""
   in

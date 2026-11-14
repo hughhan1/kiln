@@ -18,10 +18,7 @@ type t =
   | Cancelled
 
 val show : t -> string
-(** Human-readable diagnostic for CLI, JSON logs, and the C API. *)
-
-val exit_status : t -> int
-(** CLI status: 130 for cancellation, 1 otherwise. *)
+(** Human-readable diagnostic for the C API's error responses. *)
 
 val native_status : t -> int
 (** C SDK status: 3 for cancellation, 2 for internal errors, 1 otherwise. *)

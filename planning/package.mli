@@ -1,16 +1,8 @@
-(** Version declarations and the selection of a pinned version that satisfies
-    them. *)
-
-type requirement = { version : string; source : string }
-
-val optional : string -> string option -> requirement list
-(** Preserve a declaration's text and origin when it is present. *)
-
-val versions : requirement list -> string list
+(** The selection of a pinned version that satisfies version declarations. *)
 
 val select :
   tool:string ->
-  declarations:requirement list ->
+  declarations:string list ->
   version:('row -> string) ->
   parse:(string -> ('version, Error.t) result) ->
   accept:('version -> 'row -> bool) ->

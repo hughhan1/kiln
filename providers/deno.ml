@@ -1,6 +1,6 @@
 module Build_plan = Kiln_planning.Build_plan
+module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
-module Package = Kiln_planning.Package
 module Jsonc = Kiln_planning.Jsonc
 module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
@@ -144,13 +144,11 @@ let prepare request source =
   let* packages = Javascript.load source in
   let* declarations =
     Support.traverse
-      (fun (path, pkg) -> Javascript.requirements ~path ~runtime:id pkg)
+      (fun (_, pkg) -> Javascript.requirements ~runtime:id pkg)
       packages
   in
   let* file_version = Source.version source ".deno-version" in
-  let declarations =
-    Package.optional ".deno-version" file_version @ List.concat declarations
-  in
+  let declarations = Option.to_list file_version @ List.concat declarations in
   let* requirements = Semver_image.requirements declarations in
   let* build_argv = Build_plan.argv [ "deno"; "task"; "build" ] in
   let* start =
@@ -164,22 +162,20 @@ let prepare request source =
     Build_plan.argv
       ([ "deno"; "install" ] @ if locked then [ "--frozen" ] else [])
   in
-  let* resolved =
+  let* toolchain =
     Semver_image.resolve ~tool:"Deno" ~pins:Pins.deno requirements
   in
   let open Build_plan in
-  let* env =
-    environment
-      [
-        ("DENO_DIR", "/deno-dir");
-        ("DENO_NO_UPDATE_CHECK", "1");
-        ("DENO_NO_PROMPT", "1");
-      ]
+  let env =
+    [
+      ("DENO_DIR", "/deno-dir");
+      ("DENO_NO_UPDATE_CHECK", "1");
+      ("DENO_NO_PROMPT", "1");
+    ]
   in
-  let image = Semver_image.image resolved in
   let* mkdir = run [ "mkdir"; "-p"; "/deno-dir" ] in
   let* builder =
-    stage (Image image)
+    stage (Image toolchain)
       ([
          User (0, 0);
          Workdir "/app";
@@ -187,21 +183,18 @@ let prepare request source =
          mkdir;
          Source.copy ~exclude [ "." ] "/app/";
        ]
-      @ Request.install_commands request [ Run install ]
-      @ Request.build_command request
+      @ Commands.expand request.Request.install_steps [ Run install ]
+      @ Commands.expand request.Request.build
           (if List.assoc_opt "build" tasks = Some true then [ Run build_argv ]
            else []))
   in
-  let+ plan =
-    stage (Image image)
-      [
-        Workdir "/app";
-        Env env;
-        copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
-        copy ~owner:(1000, 1000) builder [ "/deno-dir/" ] "/deno-dir/";
-        User (1000, 1000);
-        Entrypoint None;
-        Start start;
-      ]
-  in
-  { Provider.plan; resolution = Semver_image.encode resolved }
+  stage (Image toolchain)
+    [
+      Workdir "/app";
+      Env env;
+      copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
+      copy ~owner:(1000, 1000) builder [ "/deno-dir/" ] "/deno-dir/";
+      User (1000, 1000);
+      Entrypoint;
+      Start start;
+    ]

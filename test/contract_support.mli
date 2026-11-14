@@ -25,15 +25,12 @@ val prepare :
   ?providers:Kiln_planning.Provider.t list ->
   string ->
   (string * Yojson.Basic.t) list ->
-  (Kiln_planning.Planner.prepared, Kiln_planning.Error.t) result
+  (Kiln_planning.Build_plan.t, Kiln_planning.Error.t) result
 (** Prepare a snapshot root with extra request fields. *)
 
 val test : string -> (unit -> unit) -> unit
 (** Run a named case and retain failures for [finish], allowing later cases to
     run. *)
-
-val temporary : (string -> 'a) -> 'a
-(** Supply a temporary directory and remove it on success or exception. *)
 
 val snapshot : (string * string) list -> string -> (string -> unit) -> unit
 (** Run a named case against temporary source files. *)

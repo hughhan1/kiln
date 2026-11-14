@@ -2,7 +2,6 @@ open Result.Syntax
 
 type detection = No_match | Fallback | Explicit
 type steps = { install : Build_plan.argv list; build : Build_plan.argv list }
-type output = { plan : Build_plan.t; resolution : Yojson.Basic.t }
 
 module type S = sig
   val id : string
@@ -10,7 +9,7 @@ module type S = sig
   val exclude : string list
   val includes : string list
   val detect : Source.t -> (detection, Error.t) result
-  val prepare : Request.t -> Source.t -> (output, Error.t) result
+  val prepare : Request.t -> Source.t -> (Build_plan.t, Error.t) result
   val develop : Source.t -> (steps, Error.t) result
 end
 
@@ -50,8 +49,7 @@ let select providers ~requested source =
   | [] ->
       Error
         (Error.Unsupported
-           (Option.fold
-              ~none:"no provider detected; select a provider explicitly"
+           (Option.fold ~none:"no provider detected"
               ~some:(fun name -> "provider " ^ name)
               requested))
   | _ :: _ :: _ ->

@@ -26,12 +26,9 @@ let show = function
   | Internal message -> "internal error: " ^ message
   | Cancelled -> "operation cancelled"
 
-let statuses = function
-  | Cancelled -> (130, 3)
-  | Internal _ -> (1, 2)
+let native_status = function
+  | Cancelled -> 3
+  | Internal _ -> 2
   | Metadata _ | Unsupported _ | Conflict _ | Workspace_escape _ | Containment _
   | No_version _ | Filesystem _ ->
-      (1, 1)
-
-let exit_status error = fst (statuses error)
-let native_status error = snd (statuses error)
+      1

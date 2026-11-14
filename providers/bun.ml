@@ -1,6 +1,6 @@
 module Build_plan = Kiln_planning.Build_plan
+module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
-module Package = Kiln_planning.Package
 module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
@@ -37,8 +37,8 @@ let prepare request source =
       ~none:(Error.Metadata ("Bun", "requires a root package.json"))
       (List.assoc_opt "package.json" packages)
   in
-  let package_requirements (path, pkg) =
-    let* requirements = Javascript.requirements ~path ~runtime:id pkg in
+  let package_requirements (_, pkg) =
+    let* requirements = Javascript.requirements ~runtime:id pkg in
     let+ () =
       match pkg.Javascript.declared_integrity with
       | None -> Ok ()
@@ -51,9 +51,7 @@ let prepare request source =
   in
   let* requirements = Support.traverse package_requirements packages in
   let* file_version = Source.version source ".bun-version" in
-  let declarations =
-    Package.optional ".bun-version" file_version @ List.concat requirements
-  in
+  let declarations = Option.to_list file_version @ List.concat requirements in
   let* requirements = Semver_image.requirements declarations in
   let* build_argv = Build_plan.argv [ "bun"; "run"; "build" ] in
   let* start =
@@ -67,35 +65,29 @@ let prepare request source =
       if List.exists (Source.has source) locks then [ "--frozen-lockfile" ]
       else [])
   in
-  let* resolved =
+  let* toolchain =
     Semver_image.resolve ~tool:"Bun" ~pins:Pins.bun requirements
   in
   let open Build_plan in
-  let image = Semver_image.image resolved in
-  let* install_env = environment [ ("BUN_INSTALL_GLOBAL_STORE", "0") ] in
-  let* runtime_env = environment [ ("NODE_ENV", "production") ] in
   let* builder =
-    stage (Image image)
+    stage (Image toolchain)
       ([
          User (0, 0);
          Workdir "/app";
-         Env install_env;
+         Env [ ("BUN_INSTALL_GLOBAL_STORE", "0") ];
          Source.copy ~exclude [ "." ] "/app/";
        ]
-      @ Request.install_commands request [ Run install ]
-      @ Request.build_command request
+      @ Commands.expand request.Request.install_steps [ Run install ]
+      @ Commands.expand request.Request.build
           (if Javascript.has_script root "build" then [ Run build_argv ] else [])
       )
   in
-  let+ plan =
-    stage (Image image)
-      [
-        Workdir "/app";
-        Env runtime_env;
-        copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
-        User (1000, 1000);
-        Entrypoint None;
-        Start start;
-      ]
-  in
-  { Provider.plan; resolution = Semver_image.encode resolved }
+  stage (Image toolchain)
+    [
+      Workdir "/app";
+      Env [ ("NODE_ENV", "production") ];
+      copy ~owner:(1000, 1000) builder [ "/app/" ] "/app/";
+      User (1000, 1000);
+      Entrypoint;
+      Start start;
+    ]

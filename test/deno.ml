@@ -1,6 +1,4 @@
-module Planner = Kiln_planning.Planner
 module Build_plan = Kiln_planning.Build_plan
-module Pins = Kiln_providers.Pins
 open Contract_support
 
 let () =
@@ -17,26 +15,10 @@ let () =
     ]
     "Deno configuration wins over package fallback"
     (fun root ->
-      let plan = ok (prepare root []) in
-      check "Deno selected"
-        (Yojson.Basic.Util.member "provider" plan.Planner.resolution
-        = `String "deno");
       check "Deno task startup"
-        (Option.map Build_plan.arguments (Build_plan.startup plan.Planner.plan)
-        = Some [ "deno"; "task"; "start" ]));
-  let oldest = (List.hd Pins.deno).Pins.version in
-  snapshot
-    [
-      ("deno.json", {|{"tasks":{"start":"deno run main.ts"}}|});
-      (".deno-version", oldest);
-    ]
-    "Deno version file selects its pin"
-    (fun root ->
-      check "selected pin"
-        (Yojson.Basic.Util.(
-           (ok (prepare root [])).Planner.resolution |> member "data"
-           |> member "version")
-        = `String oldest));
+        (contains
+           (Build_plan.dockerfile (ok (prepare root [])))
+           {|CMD ["deno","task","start"]|}));
   List.iter
     (fun (label, bytes) ->
       snapshot

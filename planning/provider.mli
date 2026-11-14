@@ -7,11 +7,6 @@ type steps = { install : Build_plan.argv list; build : Build_plan.argv list }
 (** What a development environment runs in the source directory: [install], then
     [build]. *)
 
-type output = {
-  plan : Build_plan.t;
-  resolution : Yojson.Basic.t;  (** The selected toolchain pins. *)
-}
-
 module type S = sig
   val id : string
   (** Stable implementation identifier. *)
@@ -32,7 +27,7 @@ module type S = sig
   (** Classify source evidence; explicit matches take precedence over fallbacks.
   *)
 
-  val prepare : Request.t -> Source.t -> (output, Error.t) result
+  val prepare : Request.t -> Source.t -> (Build_plan.t, Error.t) result
   (** Parse manifests and request overrides, select immutable toolchain pins,
       and generate a validated plan, failing in that order. *)
 

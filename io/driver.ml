@@ -128,5 +128,5 @@ let plan ?(providers = Kiln_providers.Builtin.all)
     let* source = Json.field "source" Json.string fields in
     develop providers cancelled source
   else
-    let+ prepared = prepare ~providers ~cancelled fields in
-    Planner.encode prepared
+    let+ plan = prepare ~providers ~cancelled fields in
+    Planner.encode plan

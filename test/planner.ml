@@ -1,11 +1,9 @@
 module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
-module Planner = Kiln_planning.Planner
-module Provider = Kiln_planning.Provider
 open Contract_support
 
 let files = [ ("package.json", {|{"main":"main.js"}|}); ("main.js", "") ]
-let recipe root fields = Planner.dockerfile (ok (prepare root fields))
+let recipe root fields = Build_plan.dockerfile (ok (prepare root fields))
 
 let () =
   List.iter
@@ -20,83 +18,43 @@ let () =
       ("Deno", [ ("deno.json", "{}") ]);
       ("Python", [ ("requirements.txt", "") ]);
     ];
-  snapshot files "provider registration and selection" (fun root ->
-      let module Alternate = struct
-        include Kiln_providers.Node
-
-        let id = "alternate"
-        let public_name = id
-        let detect _ = Ok Provider.No_match
-      end in
-      let providers : Provider.t list =
-        [ (module Kiln_providers.Node); (module Alternate) ]
-      in
-      write root "railpack.json" {|{"provider":"alternate"}|};
+  snapshot
+    [
+      ("requirements.txt", "");
+      ("main.py", "");
+      ("package.json", {|{"main":"main.js","scripts":{"build":"vite build"}}|});
+    ]
+    "provider selection"
+    (fun root ->
+      write root "railpack.json" {|{"provider":"node"}|};
       check "configured provider selected"
-        (Yojson.Basic.Util.member "provider"
-           (ok (prepare ~providers root [])).Planner.resolution
-        = `String "alternate");
+        (not (contains (recipe root []) "docker.io/library/python@"));
       write root "railpack.json" {|{"provider":"unknown"}|};
       check "unknown provider rejected" (Result.is_error (prepare root [])));
   List.iter
-    (fun (provider, files) ->
+    (fun (provider, image, files) ->
       let page =
         {|{"packageManager":"pnpm@11.25.0","scripts":{"build":"vite build"}}|}
       in
       snapshot (("package.json", page) :: files)
         (provider ^ " builds a page that declares its package manager")
         (fun root ->
-          let prepared = ok (prepare root []) in
+          let recipe = recipe root [] in
           check "the app's own provider plans it"
-            (Yojson.Basic.Util.member "provider" prepared.Planner.resolution
-            = `String provider);
+            (contains recipe ("docker.io/library/" ^ image ^ "@"));
           check "with the page built"
-            (contains
-               (Planner.dockerfile prepared)
-               {|RUN ["pnpm","run","build"]|})))
+            (contains recipe {|RUN ["pnpm","run","build"]|})))
     [
-      ("python", [ ("requirements.txt", ""); ("main.py", "") ]);
-      ("go", [ ("go.mod", "module example\ngo 1.27\n") ]);
+      ("python", "python", [ ("requirements.txt", ""); ("main.py", "") ]);
+      ("go", "golang", [ ("go.mod", "module example\ngo 1.27\n") ]);
     ];
+  snapshot files "the C API returns the recipe" (fun root ->
+      check "its dockerfile alone"
+        (Yojson.Basic.from_string (ok (Kiln_io.Driver.plan (request root [])))
+        = `Assoc [ ("dockerfile", `String (recipe root [])) ]));
   snapshot [] "unknown application" (fun root ->
       check "no implicit application fixture"
         (Result.is_error (prepare root [])));
-  test "startup inheritance" (fun () ->
-      let image =
-        ok (Build_plan.image ("example/image@sha256:" ^ String.make 64 'a'))
-      in
-      let args = [ "program" ] in
-      let command = ok (Build_plan.argv args) in
-      let parent =
-        ok
-          (Build_plan.stage (Build_plan.Image image)
-             [ Build_plan.Start (Some command) ])
-      in
-      let other = ok (Build_plan.argv [ "other" ]) in
-      List.iter
-        (fun (label, operations, expected) ->
-          let child =
-            ok (Build_plan.stage (Build_plan.Stage parent) operations)
-          in
-          check label
-            (Option.map Build_plan.arguments (Build_plan.startup child)
-            = expected))
-        [
-          ("inherit startup", [], Some args);
-          ( "entrypoint clears inherited CMD",
-            [ Build_plan.Entrypoint None ],
-            None );
-          ( "entrypoint preserves local CMD",
-            [ Build_plan.Start (Some other); Build_plan.Entrypoint None ],
-            Some [ "other" ] );
-          ( "last local CMD wins",
-            [
-              Build_plan.Entrypoint None;
-              Build_plan.Start (Some command);
-              Build_plan.Start (Some other);
-            ],
-            Some [ "other" ] );
-        ]);
   snapshot
     (files
     @ [

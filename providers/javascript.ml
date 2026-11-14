@@ -1,6 +1,5 @@
 module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
-module Package = Kiln_planning.Package
 module Source = Kiln_planning.Source
 module Support = Kiln_planning.Support
 open Result.Syntax
@@ -31,7 +30,7 @@ let integrity value =
   | None | Some _ ->
       Json.metadata "packageManager integrity" "invalid hex digest"
 
-type declaration = { name : string; requested : string option; source : string }
+type declaration = { name : string; requested : string option }
 
 let manager_names = [ "npm"; "pnpm"; "yarn"; "bun" ]
 
@@ -51,7 +50,7 @@ let declarations name dev =
     let* o = Json.object_ label value in
     let* name = Json.field "name" Json.string o in
     let+ requested = Json.field "version" (Json.optional Json.string) o in
-    { name; requested; source = "devEngines." ^ label }
+    { name; requested }
   in
   match Json.member name dev with
   | `Null -> Ok []
@@ -73,10 +72,7 @@ let package_manager spec =
       in
       if name = "" || requested = "" then
         Json.metadata "packageManager" "expected name@version"
-      else
-        Ok
-          ( [ { name; requested = Some requested; source = "packageManager" } ],
-            hash )
+      else Ok ([ { name; requested = Some requested } ], hash)
 
 let local_reference value =
   let path prefixes value =
@@ -101,8 +97,7 @@ let package bytes =
     List.filter_map
       (fun name ->
         Option.map
-          (fun version ->
-            { name; requested = Some version; source = "engines." ^ name })
+          (fun version -> { name; requested = Some version })
           (List.assoc_opt name engines))
       manager_names
   in
@@ -181,12 +176,9 @@ let root source =
   let* bytes = source.Source.read "package.json" in
   package bytes
 
-let requests ~path declarations =
-  List.concat_map
-    (fun d -> Package.optional (path ^ " " ^ d.source) d.requested)
-    declarations
+let requests declarations = List.filter_map (fun d -> d.requested) declarations
 
-let requirements ~path ~runtime pkg =
+let requirements ~runtime pkg =
   let declarations = pkg.managers @ pkg.runtimes in
   let runtime_engines =
     List.filter (fun (name, _) -> not (List.mem name manager_names)) pkg.engines
@@ -195,7 +187,5 @@ let requirements ~path ~runtime pkg =
   | Some d -> Json.metadata runtime ("conflicting declaration for " ^ d.name)
   | None ->
       Ok
-        (Package.optional
-           (path ^ " engines." ^ runtime)
-           (List.assoc_opt runtime runtime_engines)
-        @ requests ~path declarations)
+        (Option.to_list (List.assoc_opt runtime runtime_engines)
+        @ requests declarations)

@@ -10,7 +10,7 @@ let paths commands =
       | Inherit
       | Operation
           ( Build_plan.Run _ | Build_plan.Copy _ | Build_plan.Workdir _
-          | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint _
+          | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint
           | Build_plan.Start _ ) ->
           None)
     commands
@@ -118,3 +118,5 @@ let decode label value =
   let operations = expand commands [] in
   let+ () = Build_plan.validate_operations operations in
   commands
+
+let default = [ Inherit ]

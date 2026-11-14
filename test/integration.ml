@@ -7,7 +7,7 @@ let plan source =
   let dockerfile = source ^ ".Dockerfile" in
   Out_channel.with_open_bin dockerfile (fun channel ->
       Out_channel.output_string channel
-        (Kiln_planning.Planner.dockerfile (ok (prepare source []))));
+        (Kiln_planning.Build_plan.dockerfile (ok (prepare source []))));
   dockerfile
 
 let container ~rejected source plan =
@@ -65,7 +65,6 @@ let exercise name =
       copy original source;
       let plan = plan source in
       container ~rejected:false source plan;
-      ignore (run "diff" [ "-r"; original; source ]);
       let rejected = "test/rejected/" ^ name in
       if Sys.file_exists rejected then (
         copy rejected source;

@@ -1,42 +1,27 @@
-module Planner = Kiln_planning.Planner
 module Build_plan = Kiln_planning.Build_plan
-module Pins = Kiln_providers.Pins
 open Contract_support
+
+let dockerfile root = Build_plan.dockerfile (ok (prepare root []))
 
 let () =
   snapshot
-    [ ("package.json", {|{"main":"main.ts"}|}); ("bun.lock", "") ]
-    "Bun lock selects Bun over Node fallback"
+    [
+      ("package.json", {|{"main":"main.ts"}|});
+      ("bun.lock", "");
+      ("railpack.json", {|{"provider":"node"}|});
+    ]
+    "the public Node provider selects the Bun implementation"
     (fun root ->
-      let first = ok (prepare root []) in
-      check "selected Bun"
-        (Yojson.Basic.Util.member "provider" first.Planner.resolution
-        = `String "bun");
-      write root "railpack.json" {|{"provider":"node"}|};
-      check "public Node provider selects the Bun implementation"
-        ((ok (prepare root [])).Planner.resolution = first.Planner.resolution));
-  let oldest = (List.hd Pins.bun).Pins.version in
+      check "Bun planned" (contains (dockerfile root) "docker.io/oven/bun@"));
   snapshot
     [
       ( "package.json",
-        Printf.sprintf
-          {|{"packageManager":"bun@%s","engines":{"bun":">=1"},"scripts":{"start":"bun main.ts"}}|}
-          oldest );
+        {|{"packageManager":"bun@1","scripts":{"start":"bun main.ts"}}|} );
     ]
-    "Bun intersects declarations"
+    "Bun start script"
     (fun root ->
-      let plan = ok (prepare root []) in
       check "declared startup"
-        (Option.map Build_plan.arguments (Build_plan.startup plan.Planner.plan)
-        = Some [ "bun"; "run"; "start" ]);
-      write root "package.json"
-        {|{"engines":{"bun":">=1"},"scripts":{"start":"bun main.ts"}}|};
-      write root ".bun-version" oldest;
-      check "the version file and engines select its pin"
-        (Yojson.Basic.Util.(
-           (ok (prepare root [])).Planner.resolution |> member "data"
-           |> member "version")
-        = `String oldest));
+        (contains (dockerfile root) {|CMD ["bun","run","start"]|}));
   snapshot
     [
       ("package.json", {|{"packageManager":"npm@10","main":"main.js"}|});

@@ -21,9 +21,7 @@ case "$(uname -s)/$(uname -m)" in
 esac
 [ "$(opam exec -- ocamlopt -version)" = 5.5.1 ]
 opam install "$root" --deps-only --locked --yes --assume-depexts
-profile=release
-if [ "${KILN_STATIC:-0}" = 1 ]; then profile=static; fi
-opam exec -- dune build -j "${OPAMJOBS:-2}" --root "$root" --build-dir "$stage/build" --profile "$profile" ffi/libkiln.a ffi/kiln.pc
+opam exec -- dune build -j "${OPAMJOBS:-2}" --root "$root" --build-dir "$stage/build" --profile release ffi/libkiln.a ffi/kiln.pc
 mkdir -p "$output/include" "$output/lib/pkgconfig"
 install -m 644 "$stage/build/default/ffi/libkiln.a" "$output/lib/libkiln.a"
 install -m 644 "$stage/build/default/ffi/kiln.pc" "$output/lib/pkgconfig/kiln.pc"

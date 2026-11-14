@@ -5,6 +5,9 @@ val decode : t Json.decoder
     exactly one operation. Strings run through the shell; [cmd] objects are
     parsed as executable-and-arguments. *)
 
+val default : t
+(** An unconfigured step: the provider's commands alone. *)
+
 val expand : t -> Build_plan.operation list -> Build_plan.operation list
 (** Replace each inheritance marker with the provider's commands, in order. *)
 

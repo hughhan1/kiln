@@ -6,8 +6,8 @@
 (tests
  (names bun deno go node pins planner python semver)
  (modules bun deno go node pins planner python semver)
- (libraries contract_support digestif)
- (deps ../kiln_ocaml.opam node-semver.json))
+ (libraries contract_support)
+ (deps node-semver.json))
 
 (executable
  (name integration)
