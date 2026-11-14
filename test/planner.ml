@@ -72,7 +72,8 @@ let () =
         "native launcher argv overrides application startup without shell \
          interpretation"
         (contains
-           (recipe root [ ("start", Json.string_array argv) ])
+           (recipe root
+              [ ("image", `Assoc [ ("start", Json.string_array argv) ]) ])
            ("CMD " ^ Json.encode (Json.string_array argv))));
   snapshot
     [
@@ -125,9 +126,13 @@ let () =
           check "invalid request rejected"
             (Result.is_error (prepare root fields)))
         [
-          [ ("start", `List []) ];
-          [ ("start", `List [ `String "" ]) ];
-          [ ("start", `List [ `String "node"; `String "\000" ]) ];
+          [ ("image", `Assoc [ ("start", `List []) ]) ];
+          [ ("image", `Assoc [ ("start", `List [ `String "" ]) ]) ];
+          [
+            ( "image",
+              `Assoc [ ("start", `List [ `String "node"; `String "\000" ]) ] );
+          ];
+          [ ("image", `Assoc []); ("development", `Assoc []) ];
         ]);
   snapshot files "installed packages stay out of the source" (fun root ->
       Unix.mkdir (Filename.concat root "node_modules") 0o700;
@@ -138,14 +143,52 @@ let () =
       check "they are neither read nor copied"
         (contains recipe "--exclude=**/node_modules "
         && contains recipe "--exclude=**/.venv "));
-  snapshot files "contained custom configuration" (fun root ->
-      Unix.mkdir (Filename.concat root "config") 0o700;
-      write root "config/build.json"
-        {|{"steps":{"build":{"commands":["echo nested"]}}}|};
-      check "custom path used"
-        (contains
-           (recipe root [ ("configFilePath", `String "config/build.json") ])
-           "echo nested"));
+  snapshot
+    [
+      ("requirements.txt", "");
+      ("main.py", "");
+      ("package.json", {|{"scripts":{"build":"vite build"}}|});
+    ]
+    "a run executes a command in the image without its build"
+    (fun root ->
+      let run fields =
+        prepare root
+          [
+            ( "run",
+              `Assoc
+                ([
+                   ("command", Json.string_array [ "python"; "check.py" ]);
+                   ("mounts", `Assoc [ ("tooling", `String "/tooling") ]);
+                   ("overlay", `String "generated");
+                 ]
+                @ fields) );
+          ]
+      in
+      let dockerfile =
+        Build_plan.dockerfile
+          (ok (run [ ("packages", Json.string_array [ "mypy==2.4.0" ]) ]))
+      in
+      check "the app's page is not built"
+        (not (contains dockerfile {|RUN ["npm","run","build"]|}));
+      check
+        "the packages install apart, the overlay lands on the app, and the \
+         command runs with no network and its mounts"
+        (ordered
+           (String.split_on_char '\n' dockerfile)
+           [
+             {|RUN ["python","-m","pip","install"|};
+             {|COPY --from=generated [".","/app/"]|};
+             {|ENV PYTHONPATH="/opt/kiln-packages"|};
+             {|RUN --network=none --mount=type=bind,from=tooling,target=/tooling,readonly ["/bin/sh","-c",|};
+             "FROM scratch";
+           ]);
+      check "the command is passed as arguments"
+        (contains dockerfile {|"sh","python","check.py"]|});
+      write root "package.json" {|{"main":"main.js"}|};
+      Sys.remove (Filename.concat root "requirements.txt");
+      Sys.remove (Filename.concat root "main.py");
+      check "packages need Python"
+        (Result.is_error (run [ ("packages", Json.string_array [ "mypy" ]) ])));
   let page = {|{"scripts":{"build":"vite build"}}|} in
   let python =
     [
@@ -162,7 +205,7 @@ let () =
     (fun (name, files, expected) ->
       snapshot files ("development steps: " ^ name) (fun root ->
           let planned =
-            Kiln_io.Driver.plan (request root [ ("development", `Bool true) ])
+            Kiln_io.Driver.plan (request root [ ("development", `Assoc []) ])
           in
           match (planned, expected) with
           | Ok response, Some steps ->

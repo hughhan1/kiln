@@ -181,7 +181,7 @@ let load (request : Request.t) source =
   let* manager_ranges = Support.traverse parse_range manager_declarations in
   let* build_argv = Build_plan.argv [ name pm; "run"; "build" ] in
   let* command =
-    Javascript.startup pkg ~override:request.Request.start
+    Javascript.startup pkg ~override:(Request.start request)
       ~script:[ name pm; "run"; "start" ]
       ~main:[ "node" ]
   in
@@ -365,7 +365,7 @@ let unless test =
         in
         Run command
     | ( Copy _ | Workdir _ | Env _ | User _ | Entrypoint | Start _
-      | Prepend_path _ ) as operation ->
+      | Prepend_path _ | Isolated _ ) as operation ->
         Ok operation)
 
 let install_steps app copy_source =

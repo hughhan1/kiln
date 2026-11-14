@@ -30,6 +30,7 @@ type base =
   | Native of image
       (** Pinned to the build platform, where [$TARGETARCH] names the target. *)
   | Stage of stage
+  | Scratch
 
 type input = Context | Output of stage | External of image_reference
 
@@ -48,6 +49,9 @@ type operation =
   | Entrypoint
   | Start of argv option
   | Prepend_path of string
+  | Isolated of { command : argv; mounts : (input * string) list }
+      (** Run with no network, each input bind-mounted read-only at its absolute
+          path. *)
 
 val external_image : string -> (input, Error.t) result
 val validate_operations : operation list -> (unit, Error.t) result

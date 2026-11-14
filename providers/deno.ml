@@ -152,7 +152,7 @@ let prepare request source =
   let* requirements = Semver_image.requirements declarations in
   let* build_argv = Build_plan.argv [ "deno"; "task"; "build" ] in
   let* start =
-    match request.Request.start with
+    match Request.start request with
     | Some argv -> Ok (Some argv)
     | None when List.assoc_opt "start" tasks = Some true ->
         Result.map Option.some (Build_plan.argv [ "deno"; "task"; "start" ])

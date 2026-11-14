@@ -11,7 +11,7 @@ let paths commands =
       | Operation
           ( Build_plan.Run _ | Build_plan.Copy _ | Build_plan.Workdir _
           | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint
-          | Build_plan.Start _ ) ->
+          | Build_plan.Start _ | Build_plan.Isolated _ ) ->
           None)
     commands
 
@@ -120,3 +120,4 @@ let decode label value =
   commands
 
 let default = [ Inherit ]
+let none = []

@@ -100,11 +100,6 @@ let prepare ?(providers = Kiln_providers.Builtin.all)
   filesystem @@ fun () ->
   let* () = check cancelled in
   let* root, files = directory request.Request.source in
-  let config = request.Request.config_file in
-  let files =
-    if Sys.file_exists (Filename.concat root config) then config :: files
-    else files
-  in
   let probe = source cancelled root [ ".git" ] files false in
   let* request = Request.configure request probe in
   planned cancelled providers ~requested:request.Request.provider root probe
@@ -121,10 +116,7 @@ let develop providers cancelled path =
 let plan ?(providers = Kiln_providers.Builtin.all)
     ?(cancelled = fun () -> false) bytes =
   let* fields = Json.decode "request" Json.object_ bytes in
-  let* development =
-    Json.field "development" (Json.default false Json.boolean) fields
-  in
-  if development then
+  if Request.development fields then
     let* source = Json.field "source" Json.string fields in
     develop providers cancelled source
   else

@@ -8,6 +8,9 @@ val decode : t Json.decoder
 val default : t
 (** An unconfigured step: the provider's commands alone. *)
 
+val none : t
+(** A step that runs nothing, not even the provider's commands. *)
+
 val expand : t -> Build_plan.operation list -> Build_plan.operation list
 (** Replace each inheritance marker with the provider's commands, in order. *)
 

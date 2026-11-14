@@ -17,7 +17,8 @@ let step = function
   | Build_plan.Run argv -> Some (String.concat " " (Build_plan.arguments argv))
   | Build_plan.Copy { input = Build_plan.Output _ | Build_plan.External _; _ }
   | Build_plan.Workdir _ | Build_plan.Env _ | Build_plan.User _
-  | Build_plan.Entrypoint | Build_plan.Start _ | Build_plan.Prepend_path _ ->
+  | Build_plan.Entrypoint | Build_plan.Start _ | Build_plan.Prepend_path _
+  | Build_plan.Isolated _ ->
       None
 
 let own_steps stage = List.filter_map step (Build_plan.operations stage)
@@ -26,7 +27,7 @@ let own_steps stage = List.filter_map step (Build_plan.operations stage)
 let rec inherited_steps stage =
   (match Build_plan.base stage with
     | Build_plan.Stage parent -> inherited_steps parent
-    | Build_plan.Image _ | Build_plan.Native _ -> [])
+    | Build_plan.Image _ | Build_plan.Native _ | Build_plan.Scratch -> [])
   @ own_steps stage
 
 let steps plan =
@@ -48,7 +49,8 @@ let venv_follows_source plan =
           | Build_plan.Context | Build_plan.External _ -> false)
       | Build_plan.Copy _ | Build_plan.Run _ | Build_plan.Workdir _
       | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint
-      | Build_plan.Start _ | Build_plan.Prepend_path _ ->
+      | Build_plan.Start _ | Build_plan.Prepend_path _ | Build_plan.Isolated _
+        ->
           false)
     (Build_plan.operations plan)
 

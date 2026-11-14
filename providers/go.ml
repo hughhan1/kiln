@@ -77,7 +77,7 @@ let prepare request source =
   in
   let* requirements = Semver_image.requirements [ selected ] in
   let* start =
-    match request.Request.start with
+    match Request.start request with
     | Some value -> Ok (Some value)
     | None -> Result.map Option.some (Build_plan.argv [ "/app/bin/server" ])
   in
