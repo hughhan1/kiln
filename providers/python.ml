@@ -16,19 +16,14 @@ let uv_tool_version = "0.13.1"
 let includes = [ "node" ]
 let exclude = [ "__pycache__"; ".pytest_cache"; ".mypy_cache"; ".ruff_cache" ]
 
-let manifests =
-  [
-    "requirements.txt";
-    "pyproject.toml";
-    "uv.lock";
-    "poetry.lock";
-    "pdm.lock";
-    ".python-version";
-  ]
+let evidence =
+  [ "requirements.txt"; "pyproject.toml"; "uv.lock"; "poetry.lock"; "pdm.lock" ]
+
+let manifests = evidence @ [ ".python-version" ]
 
 let detect source =
   Ok
-    (if List.exists (Source.has source) manifests then Provider.Explicit
+    (if List.exists (Source.has source) evidence then Provider.Explicit
      else if Source.has source "main.py" then Provider.Fallback
      else Provider.No_match)
 

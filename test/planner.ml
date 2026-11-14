@@ -253,6 +253,11 @@ let () =
         Some
           {|{"inputs":["package.json"],"install":[["pnpm","install"]],"build":[]}|}
       );
+      ( "Node beside a Python version file",
+        [ ("package.json", "{}"); (".python-version", "3.13\n") ],
+        Some
+          {|{"inputs":["package.json"],"install":[["npm","install"]],"build":[]}|}
+      );
       ("Bun", [ ("package.json", {|{"packageManager":"bun@1"}|}) ], None);
     ];
   finish ()
