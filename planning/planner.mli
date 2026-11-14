@@ -1,35 +1,19 @@
-(** Preparation results and the shared CLI/library response schema. *)
+(** Preparation results and the C API's response schema. *)
 
-type prepared = private {
-  plan : Build_plan.t;
-  secrets : Environment.Names.t;
-  resolution : Yojson.Basic.t;
-  detected : string list;
-  packages : Package.t list;
-  metadata : (string * string) list;
-}
+type prepared = private { plan : Build_plan.t; resolution : Yojson.Basic.t }
 
-val prepare :
-  Provider.selection -> Request.t -> Source.t -> (prepared, Error.t) result
-(** Prepare the selected provider's plan, then append the request's runtime
-    variables and PATH additions to its final stage. Fail with [Missing_start]
-    when the request requires a startup the plan lacks. *)
+val prepare : Provider.t -> Request.t -> Source.t -> (prepared, Error.t) result
+(** Prepare the selected provider's plan, then append the configured PATH
+    additions to its final stage. *)
 
-val develop : Provider.selection -> Source.t -> (string, Error.t) result
+val develop : Provider.t -> Source.t -> (string, Error.t) result
 (** The JSON of what a development environment runs in the source: [install],
     then [build], each an array of argument vectors. *)
 
 val encode : prepared -> string
-(** Serialize the Dockerfile together with preparation metadata. *)
-
-val warnings : prepared -> string list
-(** Human-readable preparation warnings, also emitted in JSON metadata. *)
-
-val info : prepared -> (string * Yojson.Basic.t) list
-(** Success, detected public providers, resolved package versions, and the
-    selected toolchain. *)
+(** The JSON of the plan: its [dockerfile]. *)
 
 val failure : Error.t -> (string * Yojson.Basic.t) list
-(** Failure metadata with one human-readable error log. *)
+(** The JSON members of a failure: its [error] message. *)
 
 val dockerfile : prepared -> string

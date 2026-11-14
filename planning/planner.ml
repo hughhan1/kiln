@@ -1,15 +1,8 @@
 open Result.Syntax
 
-type prepared = {
-  plan : Build_plan.t;
-  secrets : Environment.Names.t;
-  resolution : Yojson.Basic.t;
-  detected : string list;
-  packages : Package.t list;
-  metadata : (string * string) list;
-}
+type prepared = { plan : Build_plan.t; resolution : Yojson.Basic.t }
 
-let develop { Provider.provider = (module P); _ } source =
+let develop (module P : Provider.S) source =
   let+ { Provider.install; build } = P.develop source in
   let commands steps =
     `List
@@ -20,75 +13,27 @@ let develop { Provider.provider = (module P); _ } source =
   Json.encode
     (`Assoc [ ("install", commands install); ("build", commands build) ])
 
-let prepare { Provider.provider = (module P); detected } (request : Request.t)
-    source =
+let prepare (module P : Provider.S) (request : Request.t) source =
   let* output = P.prepare request source in
-  let runtime =
-    List.map
-      (fun vars -> Build_plan.Env vars)
-      (Option.to_list request.Request.variables)
-    @ List.map
-        (fun path -> Build_plan.Prepend_path path)
-        (List.concat_map
-           (Option.fold ~none:[] ~some:Commands.paths)
-           [ request.Request.install_steps; request.Request.build ])
-  in
-  let* plan =
+  let+ plan =
     Build_plan.stage
       (Build_plan.base output.Provider.plan)
-      (Build_plan.operations output.Provider.plan @ runtime)
+      (Build_plan.operations output.Provider.plan
+      @ List.map
+          (fun path -> Build_plan.Prepend_path path)
+          (List.concat_map
+             (Option.fold ~none:[] ~some:Commands.paths)
+             [ request.Request.install_steps; request.Request.build ]))
   in
-  if request.Request.error_missing_start && Build_plan.startup plan = None then
-    Error Error.Missing_start
-  else
-    Ok
-      {
-        plan;
-        secrets = request.Request.secrets;
-        detected;
-        packages = output.Provider.packages;
-        metadata = output.Provider.metadata;
-        resolution =
-          `Assoc
-            [ ("provider", `String P.id); ("data", output.Provider.resolution) ];
-      }
-
-let log level message =
-  `Assoc
-    [
-      ("Level", `String level);
-      ("Msg", `String message);
-      ("DocsPath", `String "");
-    ]
-
-let warnings prepared =
-  match Build_plan.startup prepared.plan with
-  | Some _ -> []
-  | None -> [ Error.show Error.Missing_start ]
-
-let info prepared =
-  [
-    ("success", `Bool true);
-    ("secrets", Json.string_array (Environment.Names.elements prepared.secrets));
-    ("kilnVersion", `String Version.current);
-    ( "metadata",
+  {
+    plan;
+    resolution =
       `Assoc
-        (List.map (fun (key, value) -> (key, `String value)) prepared.metadata)
-    );
-    ("logs", `List (List.map (log "warn") (warnings prepared)));
-    ("detectedProviders", Json.string_array prepared.detected);
-    ("resolvedPackages", `Assoc (List.map Package.encode prepared.packages));
-    ("resolution", prepared.resolution);
-  ]
+        [ ("provider", `String P.id); ("data", output.Provider.resolution) ];
+  }
 
-let failure error =
-  [
-    ("success", `Bool false); ("logs", `List [ log "error" (Error.show error) ]);
-  ]
-
-let dockerfile prepared =
-  Build_plan.dockerfile ~secrets:prepared.secrets prepared.plan
+let failure error = [ ("error", `String (Error.show error)) ]
+let dockerfile prepared = Build_plan.dockerfile prepared.plan
 
 let encode prepared =
-  Json.encode
-    (`Assoc (("dockerfile", `String (dockerfile prepared)) :: info prepared))
+  Json.encode (`Assoc [ ("dockerfile", `String (dockerfile prepared)) ])

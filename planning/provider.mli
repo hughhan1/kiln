@@ -9,10 +9,6 @@ type steps = { install : Build_plan.argv list; build : Build_plan.argv list }
 
 type output = {
   plan : Build_plan.t;
-  packages : Package.t list;
-      (** Resolved versions together with the declarations that selected them.
-      *)
-  metadata : (string * string) list;
   resolution : Yojson.Basic.t;  (** The selected toolchain pins. *)
 }
 
@@ -21,8 +17,8 @@ module type S = sig
   (** Stable implementation identifier. *)
 
   val public_name : string
-  (** Public provider name used for requests and detected-provider metadata.
-      Multiple implementations may share a name. *)
+  (** Public provider name used for configuration. Multiple implementations may
+      share a name. *)
 
   val exclude : string list
   (** Directory/file basenames omitted throughout the source snapshot, besides
@@ -47,14 +43,10 @@ end
 
 type t = (module S)
 
-type selection = { provider : t; detected : string list }
-(** Selected implementation and the independently detected public names. *)
-
 val select :
-  t list -> requested:string option -> Source.t -> (selection, Error.t) result
+  t list -> requested:string option -> Source.t -> (t, Error.t) result
 (** Detect every provider and prefer explicit evidence over fallback evidence.
     Without a requested name, drop candidates another candidate includes.
     Restrict selection to a requested public name when supplied, allowing an
     undetected implementation if that name has no detection evidence. Require a
-    unique candidate and propagate malformed metadata. [detected] always lists
-    the strongest public detections independently of the request. *)
+    unique candidate and propagate malformed metadata. *)

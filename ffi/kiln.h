@@ -26,8 +26,8 @@ typedef struct {
 kiln_request *kiln_request_create(const char *data, size_t len);
 /* May be called from another thread while plan is running. */
 void kiln_request_cancel(kiln_request *request);
-/* Return JSON on success and failure. Failures contain success:false and logs
-   with Level, Msg and DocsPath fields. Source paths are absolute. */
+/* Return JSON on success and failure: a plan, or {"error": message}. Source
+   paths are absolute. */
 kiln_result kiln_plan(kiln_request *request);
 /* Free only after plan and any concurrent cancellation calls finish. */
 void kiln_request_free(kiln_request *request);

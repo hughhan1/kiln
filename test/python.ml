@@ -17,8 +17,7 @@ let step = function
   | Build_plan.Run argv -> Some (String.concat " " (Build_plan.arguments argv))
   | Build_plan.Copy { input = Build_plan.Output _ | Build_plan.External _; _ }
   | Build_plan.Workdir _ | Build_plan.Env _ | Build_plan.User _
-  | Build_plan.Entrypoint _ | Build_plan.Start _ | Build_plan.Prepend_path _
-  | Build_plan.Write _ ->
+  | Build_plan.Entrypoint _ | Build_plan.Start _ | Build_plan.Prepend_path _ ->
       None
 
 let own_steps stage = List.filter_map step (Build_plan.operations stage)
@@ -50,7 +49,7 @@ let venv_follows_source prepared =
           | Build_plan.Context | Build_plan.External _ -> false)
       | Build_plan.Copy _ | Build_plan.Run _ | Build_plan.Workdir _
       | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint _
-      | Build_plan.Start _ | Build_plan.Prepend_path _ | Build_plan.Write _ ->
+      | Build_plan.Start _ | Build_plan.Prepend_path _ ->
           false)
     (Build_plan.operations prepared.Planner.plan)
 
@@ -90,13 +89,8 @@ let () =
       check "the file selects the pin's images"
         (member "builder" data = `String pin.Pins.builder
         && member "runtime" data = `String pin.Pins.runtime);
-      let package = package first "python" in
-      check "the plan reports the intersected request and its sources"
-        (member "resolvedVersion" package = `String oldest_python
-        && member "requestedVersion" package
-           = `String (oldest_python ^ " && >=3,!=" ^ newest_python)
-        && member "source" package
-           = `String ".python-version, pyproject.toml project.requires-python");
+      check "the intersection selects the oldest pin"
+        (member "python" data = `String oldest_python);
       write root ".python-version" newest_python;
       check "declarations that exclude each other leave nothing"
         (Result.is_error (prepare root [])));
@@ -116,52 +110,9 @@ let () =
           requires-python = '>=3.11'\n\
           [tool.uv]\n\
           required-version = '<=" ^ oldest_uv ^ "'\n");
-      let uv = package (ok (prepare root [])) "uv" in
-      check "explicit constraints select a pin and report their origins"
-        (member "requestedVersion" uv
-         = `String ("<=" ^ oldest_uv ^ " && >=" ^ oldest_uv)
-        && member "resolvedVersion" uv = `String oldest_uv
-        && member "source" uv
-           = `String
-               "pyproject.toml tool.uv.required-version, uv.toml \
-                required-version"));
-  snapshot
-    [
-      ("main.py", "");
-      (".python-version", "3.13");
-      ( "pyproject.toml",
-        "[project]\n\
-         requires-python='>=3.13'\n\
-         [tool.uv]\n\
-         required-version='>=0.9'\n" );
-      ("uv.lock", "version=1\nrequires-python='>=3.13'\n");
-    ]
-    "Python and uv environment versions replace declared constraints"
-    (fun root ->
-      let prepared =
-        ok
-          (prepare root
-             [
-               ( "environment",
-                 `Assoc
-                   [
-                     ("RAILPACK_PYTHON_VERSION", `String oldest_python);
-                     ("RAILPACK_UV_VERSION", `String oldest_uv);
-                   ] );
-             ])
-      in
-      let open Yojson.Basic.Util in
-      List.iter
-        (fun (name, version, setting) ->
-          let package = package prepared name in
-          check "environment toolchain and provenance selected"
-            (member "resolvedVersion" package = `String version
-            && member "requestedVersion" package = `String version
-            && member "source" package = `String setting))
-        [
-          ("python", oldest_python, "RAILPACK_PYTHON_VERSION");
-          ("uv", oldest_uv, "RAILPACK_UV_VERSION");
-        ]);
+      check "explicit constraints select a pin"
+        ((ok (prepare root [])).Planner.resolution |> member "data"
+       |> member "installer" |> member "version" = `String oldest_uv));
   snapshot
     [
       ("requirements.txt", "idna==3.10\n-r requirements/base.txt\n");
@@ -229,11 +180,6 @@ let () =
        build-backend='setuptools.build_meta'\n"
   in
   let project = pyproject "idna==3.10" in
-  let install_mode prepared =
-    Yojson.Basic.Util.(
-      `Assoc (Planner.info prepared)
-      |> member "metadata" |> member "dependencyInstall" |> to_string)
-  in
   snapshot
     [ ("pyproject.toml", project); ("main.py", "") ]
     "pip project installs dependencies natively before the source"
@@ -245,8 +191,6 @@ let () =
         && contains dockerfile "ARG TARGETARCH"
         && contains dockerfile {|--python-platform \"$arch-manylinux_2_40\"|}
         && contains dockerfile {|"idna==3.10"]|});
-      check "the plan names the install path"
-        (String.starts_with ~prefix:"native" (install_mode prepared));
       check "the project installs alone after the source copy"
         (ordered (steps prepared)
            [
@@ -268,29 +212,6 @@ let () =
       write root "pyproject.toml" (pyproject "idna==3.11");
       check "a dependency bump changes the install"
         (Planner.dockerfile (ok (prepare root [])) <> dockerfile));
-  snapshot
-    [ ("pyproject.toml", project); ("main.py", "") ]
-    "pip's own environment keeps the install with pip"
-    (fun root ->
-      let prepared =
-        ok
-          (prepare root
-             [
-               ( "environment",
-                 `Assoc [ ("PIP_INDEX_URL", `String "https://example.test") ] );
-             ])
-      in
-      check "stays on the target platform"
-        (not (contains (Planner.dockerfile prepared) "$BUILDPLATFORM"));
-      check "the plan names the install path"
-        (install_mode prepared = "emulated");
-      check "dependencies still precede the source"
-        (ordered (steps prepared)
-           [
-             "python -m pip install --no-cache-dir idna==3.10";
-             "source";
-             "/bin/sh -c python -m pip install --no-cache-dir --no-deps";
-           ]));
   List.iter
     (fun (label, files, fields) ->
       snapshot files label (fun root ->
@@ -319,12 +240,6 @@ let () =
              build-backend='setuptools.build_meta'\n" );
         ],
         [] );
-      ( "custom install keeps the whole source",
-        [ ("requirements.txt", "idna==3.10\n"); ("main.py", "") ],
-        [
-          ( "environment",
-            `Assoc [ ("RAILPACK_INSTALL_CMD", `String "pip install idna") ] );
-        ] );
       ( "uv workspace keeps the whole source",
         [
           ( "pyproject.toml",
@@ -425,19 +340,9 @@ let () =
         (fun root ->
           write root "railpack.json"
             ({|{"steps":{"install":{"commands":|} ^ commands ^ "}}}");
-          let prepared =
-            ok
-              (prepare root
-                 [
-                   ( "environment",
-                     `Assoc [ ("RAILPACK_INSTALL_CMD", `String "echo ignored") ]
-                   );
-                 ])
-          in
+          let prepared = ok (prepare root []) in
           let steps = steps prepared in
           check "configured commands take their place" (ordered steps expected);
-          check "configuration replaces the install command"
-            (not (contains (Planner.dockerfile prepared) "echo ignored"));
           check "inheritance selects the dependency layout"
             (List.exists
                (String.starts_with ~prefix:"manifest")
@@ -511,14 +416,10 @@ let () =
           check "manager tool is installed in a separate virtualenv"
             (contains dockerfile "/opt/kiln-tools/bin/pip"
             && contains dockerfile tool_requirement);
-          let open Yojson.Basic.Util in
-          let package = package prepared manager in
-          check "manager version is reported"
-            (member "resolvedVersion" package = `String default_version
-            && member "source" package = `String "kiln default");
-          let metadata = `Assoc (Planner.info prepared) |> member "metadata" in
-          check "manager metadata is reported"
-            (member "pythonPackageManager" metadata = `String manager)))
+          check "manager version is resolved"
+            Yojson.Basic.Util.(
+              prepared.Planner.resolution |> member "data" |> member "installer"
+              |> member "version" = `String default_version)))
     [
       ( "poetry",
         "poetry.lock",
@@ -555,28 +456,6 @@ let () =
       ("poetry", "--no-root", {|"poetry","check","--lock"|});
       ("pdm", "--no-self", {|"--check"|});
     ];
-  List.iter
-    (fun (manager, version) ->
-      snapshot
-        [ ("pyproject.toml", manager_project manager); ("main.py", "") ]
-        (manager ^ " version override")
-        (fun root ->
-          let setting =
-            "RAILPACK_" ^ String.uppercase_ascii manager ^ "_VERSION"
-          in
-          let prepared =
-            ok
-              (prepare root
-                 [ ("environment", `Assoc [ (setting, `String version) ]) ])
-          in
-          let open Yojson.Basic.Util in
-          let package = package prepared manager in
-          check "the override is reported"
-            (member "resolvedVersion" package = `String version
-            && member "source" package = `String setting);
-          check "the override is installed"
-            (contains (Planner.dockerfile prepared) ("==" ^ version))))
-    [ ("poetry", "2.4.0"); ("pdm", "2.28.1") ];
   snapshot
     [
       ( "pyproject.toml",
@@ -593,13 +472,10 @@ let () =
         (Filename.concat root "nested")
         "pyproject.toml"
         "[project]\nname='nested'\nversion='1.0.0'\n[tool.poetry]\n";
-      let metadata =
-        `Assoc (Planner.info (ok (prepare root [])))
-        |> Yojson.Basic.Util.member "metadata"
-      in
       check "root installer remains pip"
-        (Yojson.Basic.Util.member "pythonPackageManager" metadata
-        = `String "pip"));
+        Yojson.Basic.Util.(
+          (ok (prepare root [])).Planner.resolution |> member "data"
+          |> member "installer" |> member "name" = `String "pip"));
   snapshot
     [
       ( "pyproject.toml",

@@ -4,7 +4,6 @@ type t =
   | Conflict of string
   | Workspace_escape of string
   | Containment of string
-  | Missing_start
   | No_version of {
       tool : string;
       requirements : string;
@@ -20,8 +19,6 @@ let show = function
   | Conflict message -> "conflicting " ^ message
   | Workspace_escape pattern -> "workspace pattern escapes source: " ^ pattern
   | Containment path -> "path escapes or is missing from snapshot: " ^ path
-  | Missing_start ->
-      "no startup: provide start argv or an application entry point"
   | No_version { tool; requirements; supported } ->
       "no compatible " ^ tool ^ " version for " ^ requirements ^ "; supported: "
       ^ String.concat ", " supported
@@ -33,7 +30,7 @@ let statuses = function
   | Cancelled -> (130, 3)
   | Internal _ -> (1, 2)
   | Metadata _ | Unsupported _ | Conflict _ | Workspace_escape _ | Containment _
-  | Missing_start | No_version _ | Filesystem _ ->
+  | No_version _ | Filesystem _ ->
       (1, 1)
 
 let exit_status error = fst (statuses error)

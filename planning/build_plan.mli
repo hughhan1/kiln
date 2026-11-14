@@ -54,7 +54,6 @@ type operation =
   | Entrypoint of argv option
   | Start of argv option
   | Prepend_path of string
-  | Write of { path : string; contents : string; mode : int }
 
 val external_image : string -> (input, Error.t) result
 val validate_operations : operation list -> (unit, Error.t) result
@@ -78,10 +77,9 @@ val startup : t -> argv option
 (** The last CMD in this stage, or an inherited CMD unless ENTRYPOINT resets it.
 *)
 
-val dockerfile : ?secrets:Environment.Names.t -> t -> string
+val dockerfile : t -> string
 (** Render dependencies once, with stable stage names and JSON-escaped argument
-    arrays. Mount each supplied secret as a required environment variable on RUN
-    operations; values are never written into the Dockerfile. *)
+    arrays. *)
 
 val run : string list -> (operation, Error.t) result
 (** Construct a RUN operation after validating its argv. *)

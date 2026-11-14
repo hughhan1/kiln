@@ -75,19 +75,14 @@ let prepare request source =
         Semver.show version
     | Some _ -> Json.metadata "go.mod" "unsupported Go toolchain"
   in
-  let declarations =
-    Request.defaults request id
-      [ { Package.source = "go.mod"; version = selected } ]
-  in
+  let declarations = [ { Package.source = "go.mod"; version = selected } ] in
   let* requirements = Semver_image.requirements declarations in
   let* start =
-    match Request.start request with
+    match request.Request.start with
     | Some value -> Ok (Some value)
     | None -> Result.map Option.some (Build_plan.argv [ "/app/bin/server" ])
   in
-  let* install =
-    Request.install_command request [ "go"; "mod"; "download"; "all" ]
-  in
+  let* install = Build_plan.argv [ "go"; "mod"; "download"; "all" ] in
   let* frontend =
     Node.frontend ~exclude:([ "*.go"; "go.mod"; "go.sum" ] @ exclude) source
   in
@@ -135,8 +130,6 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
   in
   {
     Provider.plan;
-    packages = [ Semver_image.package id requirements compiler ];
-    metadata = [];
     resolution =
       `Assoc
         [

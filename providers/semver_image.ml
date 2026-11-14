@@ -47,6 +47,3 @@ let encode resolved =
       ("version", `String (Semver.show resolved.version));
       ("image", `String (Build_plan.image_ref resolved.image));
     ]
-
-let package name requirements resolved =
-  Package.resolve name requirements.declarations (Semver.show resolved.version)

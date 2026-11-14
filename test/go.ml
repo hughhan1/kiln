@@ -19,7 +19,9 @@ let () =
         (Option.map Build_plan.arguments (Build_plan.startup plan.Planner.plan)
         = Some [ "/app/bin/server" ]);
       check "explicit toolchain"
-        (Yojson.Basic.Util.member "resolvedVersion" (package plan "go")
+        (Yojson.Basic.Util.(
+           plan.Planner.resolution |> member "data" |> member "compiler"
+           |> member "version")
         = `String newest));
   snapshot
     [

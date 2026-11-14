@@ -21,7 +21,7 @@ struct kiln_request {
   char input[];
 };
 
-#define DIAGNOSTIC(message) "{\"success\":false,\"logs\":[{\"Level\":\"error\",\"Msg\":\"" message "\",\"DocsPath\":\"\"}]}"
+#define DIAGNOSTIC(message) "{\"error\":\"" message "\"}"
 #define FAILURE(message, status) ((kiln_result){ DIAGNOSTIC(message), sizeof(DIAGNOSTIC(message)) - 1, status })
 
 static pthread_once_t initialized = PTHREAD_ONCE_INIT;

@@ -33,8 +33,9 @@ let () =
     "Deno version file selects its pin"
     (fun root ->
       check "selected pin"
-        (Yojson.Basic.Util.member "resolvedVersion"
-           (package (ok (prepare root [])) "deno")
+        (Yojson.Basic.Util.(
+           (ok (prepare root [])).Planner.resolution |> member "data"
+           |> member "version")
         = `String oldest));
   List.iter
     (fun (label, bytes) ->

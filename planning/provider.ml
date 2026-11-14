@@ -2,13 +2,7 @@ open Result.Syntax
 
 type detection = No_match | Fallback | Explicit
 type steps = { install : Build_plan.argv list; build : Build_plan.argv list }
-
-type output = {
-  plan : Build_plan.t;
-  packages : Package.t list;
-  metadata : (string * string) list;
-  resolution : Yojson.Basic.t;
-}
+type output = { plan : Build_plan.t; resolution : Yojson.Basic.t }
 
 module type S = sig
   val id : string
@@ -21,7 +15,6 @@ module type S = sig
 end
 
 type t = (module S)
-type selection = { provider : t; detected : string list }
 
 let select providers ~requested source =
   let* matches =
@@ -34,10 +27,6 @@ let select providers ~requested source =
   let strongest matches =
     let only evidence = List.filter (fun (e, _) -> e = evidence) matches in
     match only Explicit with [] -> only Fallback | explicit -> explicit
-  in
-  let detected =
-    List.map (fun (_, (module P : S)) -> P.public_name) (strongest matches)
-    |> List.sort_uniq String.compare
   in
   let candidates =
     match requested with
@@ -56,21 +45,18 @@ let select providers ~requested source =
         in
         match strongest candidates with [] -> candidates | found -> found)
   in
-  let+ provider =
-    match candidates with
-    | [ (_, provider) ] -> Ok provider
-    | [] ->
-        Error
-          (Error.Unsupported
-             (Option.fold
-                ~none:"no provider detected; select a provider explicitly"
-                ~some:(fun name -> "provider " ^ name)
-                requested))
-    | _ :: _ :: _ ->
-        Error
-          (Error.Conflict
-             ("providers: "
-             ^ String.concat ", "
-                 (List.map (fun (_, (module P : S)) -> P.id) candidates)))
-  in
-  { provider; detected }
+  match candidates with
+  | [ (_, provider) ] -> Ok provider
+  | [] ->
+      Error
+        (Error.Unsupported
+           (Option.fold
+              ~none:"no provider detected; select a provider explicitly"
+              ~some:(fun name -> "provider " ^ name)
+              requested))
+  | _ :: _ :: _ ->
+      Error
+        (Error.Conflict
+           ("providers: "
+           ^ String.concat ", "
+               (List.map (fun (_, (module P : S)) -> P.id) candidates)))

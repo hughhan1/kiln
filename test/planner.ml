@@ -2,42 +2,17 @@ module Build_plan = Kiln_planning.Build_plan
 module Json = Kiln_planning.Json
 module Planner = Kiln_planning.Planner
 module Provider = Kiln_planning.Provider
-module Pins = Kiln_providers.Pins
 open Contract_support
 
 let files = [ ("package.json", {|{"main":"main.js"}|}); ("main.js", "") ]
-let oldest_node = (List.hd Pins.node).Pins.node.Pins.release
 let recipe root fields = Planner.dockerfile (ok (prepare root fields))
 
 let () =
   List.iter
     (fun (provider, files) ->
       snapshot files (provider ^ " optional startup") (fun root ->
-          let prepared = ok (prepare root []) in
-          let open Yojson.Basic.Util in
-          let response = Yojson.Basic.from_string (Planner.encode prepared) in
           check "inherited image command cleared"
-            (contains (member "dockerfile" response |> to_string) "CMD []");
-          check "missing startup warning"
-            (match member "logs" response |> to_list with
-            | [ log ] ->
-                member "Level" log = `String "warn"
-                && contains (member "Msg" log |> to_string) "no startup"
-            | [] | _ :: _ -> false);
-          check "strict mode rejects a missing startup"
-            (prepare root [ ("errorMissingStartCommand", `Bool true) ]
-            = Error Kiln_planning.Error.Missing_start);
-          let launched =
-            ok
-              (prepare root
-                 [
-                   ("start", Json.string_array [ "/launcher" ]);
-                   ("errorMissingStartCommand", `Bool true);
-                 ])
-          in
-          check "declared startup has no warning"
-            (member "logs" (Yojson.Basic.from_string (Planner.encode launched))
-            = `List [])))
+            (contains (recipe root []) "CMD []")))
     [
       ("Node", [ ("package.json", "{}") ]);
       ("empty Node entry", [ ("package.json", {|{"main":""}|}) ]);
@@ -45,20 +20,6 @@ let () =
       ("Deno", [ ("deno.json", "{}") ]);
       ("Python", [ ("requirements.txt", "") ]);
     ];
-  snapshot files "environment version overrides a version file" (fun root ->
-      write root ".node-version" (last Pins.node).Pins.node.Pins.release;
-      let prepared =
-        ok
-          (prepare root
-             [
-               ( "environment",
-                 `Assoc [ ("RAILPACK_NODE_VERSION", `String oldest_node) ] );
-             ])
-      in
-      let open Yojson.Basic.Util in
-      check "environment overrides file version"
-        (prepared.Planner.resolution |> member "data" |> member "nodeVersion"
-       = `String oldest_node));
   snapshot files "provider registration and selection" (fun root ->
       let module Alternate = struct
         include Kiln_providers.Node
@@ -70,18 +31,13 @@ let () =
       let providers : Provider.t list =
         [ (module Kiln_providers.Node); (module Alternate) ]
       in
-      let explicit =
-        ok (prepare ~providers root [ ("provider", `String "alternate") ])
-      in
-      check "explicit provider selected"
-        (Yojson.Basic.Util.member "provider" explicit.Planner.resolution
+      write root "railpack.json" {|{"provider":"alternate"}|};
+      check "configured provider selected"
+        (Yojson.Basic.Util.member "provider"
+           (ok (prepare ~providers root [])).Planner.resolution
         = `String "alternate");
-      check "detection is independent of the selected implementation"
-        (Yojson.Basic.Util.member "detectedProviders"
-           (`Assoc (Planner.info explicit))
-        = `List [ `String "node" ]);
-      check "unknown provider rejected"
-        (Result.is_error (prepare root [ ("provider", `String "unknown") ])));
+      write root "railpack.json" {|{"provider":"unknown"}|};
+      check "unknown provider rejected" (Result.is_error (prepare root [])));
   List.iter
     (fun (provider, files) ->
       let page =
@@ -146,95 +102,39 @@ let () =
     @ [
         ( "railpack.json",
           {|{
-    // Shared configuration, including JSONC syntax.
+    // Configuration in JSONC syntax.
     "provider": "node",
-    "deploy": {"startCommand": "cat artifact", "variables": {"MODE":"configured"}},
-    "secrets": ["FILE", "FILE"],
   }|}
         );
       ])
-    "shared preparation contract"
+    "native startup and JSONC configuration"
     (fun root ->
-      let first =
-        ok
-          (prepare root
-             [
-               ( "environment",
-                 `Assoc
-                   [
-                     ("RAILPACK_BUILD_CMD", `String "echo environment-build");
-                     ("RAILPACK_START_CMD", `String "echo environment-start");
-                     ("TOKEN", `String "private");
-                   ] );
-             ])
-      in
-      let recipe = Planner.dockerfile first in
-      check "secret values stay out of prepared output"
-        (not (contains (Planner.encode first) "private"));
-      check "file startup takes precedence"
-        (contains recipe {|CMD ["/bin/bash","-c","cat artifact"]|});
-      check "runtime variables" (contains recipe {|MODE="configured"|});
-      let response = Yojson.Basic.from_string (Planner.encode first) in
-      let open Yojson.Basic.Util in
-      let version =
-        read "../kiln_ocaml.opam" |> String.split_on_char '\n'
-        |> List.find (String.starts_with ~prefix:"version: ")
-        |> String.drop_first 10 |> String.drop_last 1
-      in
-      check "result identifies the package version"
-        (member "kilnVersion" response = `String version);
-      check "configured and supplied secrets form a set"
-        (response |> member "secrets"
-        = Json.string_array
-            [ "FILE"; "RAILPACK_BUILD_CMD"; "RAILPACK_START_CMD"; "TOKEN" ]);
       let argv = [ "/launcher"; "with spaces"; "\"quoted\""; "" ] in
-      let native =
-        ok
-          (prepare root
-             [
-               ("start", Json.string_array argv);
-               ( "environment",
-                 `Assoc
-                   [ ("RAILPACK_START_CMD", `String "echo environment-start") ]
-               );
-             ])
-      in
-      let dockerfile =
-        Yojson.Basic.from_string (Planner.encode native)
-        |> member "dockerfile" |> to_string
-      in
       check
         "native launcher argv overrides application startup without shell \
          interpretation"
-        (contains dockerfile ("CMD " ^ Json.encode (Json.string_array argv))));
+        (contains
+           (recipe root [ ("start", Json.string_array argv) ])
+           ("CMD " ^ Json.encode (Json.string_array argv))));
   snapshot
     [
       ( "package.json",
         {|{"main":"main.js","scripts":{"build":"echo inherited"}}|} );
     ]
-    "build command precedence and inheritance"
+    "build command inheritance"
     (fun root ->
       List.iter
-        (fun (commands, expected) ->
+        (fun (commands, inherited) ->
           write root "railpack.json"
             ("{\"steps\":{\"build\":{" ^ commands ^ "}}}");
-          let prepared =
-            ok (prepare root [ ("buildCommand", `String "echo request") ])
-          in
-          let recipe = Build_plan.dockerfile prepared.Planner.plan in
-          List.iter
-            (fun (line, selected) ->
-              check (commands ^ ": " ^ line) (contains recipe line = selected))
-            [
-              ({|RUN ["/bin/sh","-c","echo request"]|}, expected = `Request);
-              ({|RUN ["npm","run","build"]|}, expected = `Inherit);
-            ])
+          check commands
+            (contains (recipe root []) {|RUN ["npm","run","build"]|} = inherited))
         [
-          ("", `Request);
-          ({|"commands":[]|}, `Empty);
-          ({|"commands":["..."]|}, `Inherit);
-          ({|"commands":[{"cmd":"..."}]|}, `Inherit);
-          ({|"commands":[{"cmd":"sh -c '...'"}]|}, `Inherit);
+          ("", true);
+          ({|"commands":[]|}, false);
+          ({|"commands":["..."]|}, true);
+          ({|"commands":[{"cmd":"..."}]|}, true);
+          ({|"commands":[{"cmd":"sh -c '...'"}]|}, true);
         ]);
   snapshot files "inherited install follows earlier commands" (fun root ->
       write root "railpack.json"
@@ -251,21 +151,15 @@ let () =
       in
       List.iter reject
         [
-          {|{"deploy":{"aptPackages":["curl"]}}|};
+          {|{"deploy":{"startCommand":"echo start"}}|};
           {|{"steps":{"build":{"inputs":[]}}}|};
-          {|{"steps":{"install":{"assets":{}}}}|};
-          {|{"steps":{"install":{"commands":["FILE:artifact missing"]}}}|};
           {|{"steps":{"build":{"commands":[{"cmd":"'unclosed"}]}}}|};
           {|{"steps":{"build":{"commands":[{"cmd":"echo ignored","path":"/tools"}]}}}|};
           {|{"steps":{"build":{"commands":["COPY:only-source"]}}}|};
           {|{"steps":{"build":{"commands":[{"src":"","dest":"copy.js"}]}}}|};
           {|{"steps":{"build":{"commands":[{"src":"main.js","dest":"copy.js","image":"bad image"}]}}}|};
-          {|{"steps":{"build":{"assets":{"x":"value"},"commands":[{"path":"artifact","name":"x","mode":4096}]}}}|};
           {|{"steps":{"build":{"commands":["PATH:/tools\rINJECT"]}}}|};
           {|{"steps":{"build":{"commands":[" "]}}}|};
-          {|{"deploy":{"variables":{"BAD KEY":"value"}}}|};
-          {|{"deploy":{"variables":{"MODE":"line\nbreak"}}}|};
-          {|{"secrets":["BAD KEY"]}|};
         ]);
   snapshot files "invalid request is rejected" (fun root ->
       List.iter
@@ -273,60 +167,10 @@ let () =
           check "invalid request rejected"
             (Result.is_error (prepare root fields)))
         [
-          [ ("environment", `Assoc [ ("BAD KEY", `String "value") ]) ];
-          [ ("environment", `Assoc [ ("TOKEN", `String "bad\000value") ]) ];
-          [
-            ("buildCommand", `Int 42);
-            ( "environment",
-              `Assoc [ ("RAILPACK_BUILD_CMD", `String "echo build") ] );
-          ];
-          [
-            ("start", Json.string_array [ "node" ]);
-            ("startCommand", `String "echo bad");
-          ];
           [ ("start", `List []) ];
           [ ("start", `List [ `String "" ]) ];
           [ ("start", `List [ `String "node"; `String "\000" ]) ];
-          [ ("errorMissingStartCommand", `String "true") ];
-          [ ("platforms", `List []) ];
-          [ ("platforms", `List [ `String "darwin/arm64" ]) ];
         ]);
-  snapshot files "CLI rejects invalid environment names" (fun root ->
-      List.iter
-        (fun entry ->
-          let errors = Buffer.create 64 in
-          ignore
-            (run ~exit_code:1 "../bin/main.exe" ~errors
-               [ "prepare"; root; "-e"; entry; "--hide-pretty-plan" ]);
-          check "invalid name diagnosed"
-            (contains (Buffer.contents errors) "invalid variable name"))
-        [ "=value" ]);
-  snapshot
-    [ ("package.json", "{}") ]
-    "CLI failure"
-    (fun root ->
-      let info = Filename.concat root "info.json" in
-      let output =
-        run ~exit_code:1 "../bin/main.exe"
-          [
-            "prepare";
-            root;
-            "--info-out";
-            info;
-            "--hide-pretty-plan";
-            "--error-missing-start";
-          ]
-      in
-      check "failed CLI emits no plan" (output = "");
-      let open Yojson.Basic.Util in
-      let info = Yojson.Basic.from_file info in
-      check "failure" (member "success" info = `Bool false);
-      check "structured diagnostic"
-        (match member "logs" info |> to_list with
-        | [ log ] ->
-            member "Level" log = `String "error"
-            && contains (member "Msg" log |> to_string) "no startup"
-        | [] | _ :: _ -> false));
   snapshot files "installed packages stay out of the source" (fun root ->
       Unix.mkdir (Filename.concat root "node_modules") 0o700;
       write root "node_modules/package.json" "[";
@@ -339,12 +183,11 @@ let () =
   snapshot files "contained custom configuration" (fun root ->
       Unix.mkdir (Filename.concat root "config") 0o700;
       write root "config/build.json"
-        {|{"deploy":{"startCommand":"echo nested"}}|};
-      let plan =
-        ok (prepare root [ ("configFilePath", `String "config/build.json") ])
-      in
+        {|{"steps":{"build":{"commands":["echo nested"]}}}|};
       check "custom path used"
-        (contains (Build_plan.dockerfile plan.Planner.plan) "echo nested"));
+        (contains
+           (recipe root [ ("configFilePath", `String "config/build.json") ])
+           "echo nested"));
   let page = {|{"scripts":{"build":"vite build"}}|} in
   let python =
     [

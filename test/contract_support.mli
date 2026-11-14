@@ -28,9 +28,6 @@ val prepare :
   (Kiln_planning.Planner.prepared, Kiln_planning.Error.t) result
 (** Prepare a snapshot root with extra request fields. *)
 
-val package : Kiln_planning.Planner.prepared -> string -> Yojson.Basic.t
-(** A resolved package's reported metadata. *)
-
 val test : string -> (unit -> unit) -> unit
 (** Run a named case and retain failures for [finish], allowing later cases to
     run. *)
@@ -44,22 +41,10 @@ val snapshot : (string * string) list -> string -> (string -> unit) -> unit
 val finish : unit -> unit
 (** Exit unsuccessfully if any named case failed. *)
 
-val read : string -> string
-(** Read the exact file bytes for artifact assertions. *)
-
-val environment : (string * string) list -> string array
-(** Overlay variables on the current process environment. *)
-
-val run :
-  ?env:string array ->
-  ?exit_code:int ->
-  ?errors:Buffer.t ->
-  string ->
-  string list ->
-  string
+val run : ?exit_code:int -> string -> string list -> string
 (** Capture stdout and require the expected exit status (default zero),
-    including stderr in failure diagnostics and the optional [errors] buffer.
-    Reap or terminate the child before returning. *)
+    including stderr in failure diagnostics. Reap or terminate the child before
+    returning. *)
 
 val last : 'a list -> 'a
 (** The final element of a nonempty list, the newest in a pin table. *)

@@ -12,12 +12,9 @@ let () =
       check "selected Bun"
         (Yojson.Basic.Util.member "provider" first.Planner.resolution
         = `String "bun");
-      let selected = ok (prepare root [ ("provider", `String "node") ]) in
+      write root "railpack.json" {|{"provider":"node"}|};
       check "public Node provider selects the Bun implementation"
-        (selected.Planner.resolution = first.Planner.resolution
-        && Yojson.Basic.Util.member "detectedProviders"
-             (`Assoc (Planner.info selected))
-           = `List [ `String "node" ]));
+        ((ok (prepare root [])).Planner.resolution = first.Planner.resolution));
   let oldest = (List.hd Pins.bun).Pins.version in
   snapshot
     [
@@ -35,13 +32,11 @@ let () =
       write root "package.json"
         {|{"engines":{"bun":">=1"},"scripts":{"start":"bun main.ts"}}|};
       write root ".bun-version" oldest;
-      let open Yojson.Basic.Util in
-      let package = package (ok (prepare root [])) "bun" in
-      check "the plan reports the declaration origins"
-        (member "resolvedVersion" package = `String oldest
-        && member "requestedVersion" package = `String (oldest ^ " && >=1")
-        && member "source" package
-           = `String ".bun-version, package.json engines.bun"));
+      check "the version file and engines select its pin"
+        (Yojson.Basic.Util.(
+           (ok (prepare root [])).Planner.resolution |> member "data"
+           |> member "version")
+        = `String oldest));
   snapshot
     [
       ("package.json", {|{"packageManager":"npm@10","main":"main.js"}|});
@@ -50,8 +45,9 @@ let () =
     "explicit runtimes are ambiguous"
     (fun root ->
       check "ambiguous detection" (Result.is_error (prepare root []));
-      check "override still validates declarations"
-        (Result.is_error (prepare root [ ("provider", `String "bun") ])));
+      write root "railpack.json" {|{"provider":"bun"}|};
+      check "a configured provider still validates declarations"
+        (Result.is_error (prepare root [])));
   snapshot
     [
       ( "package.json",

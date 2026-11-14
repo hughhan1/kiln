@@ -52,17 +52,16 @@ let prepare request source =
   let* requirements = Support.traverse package_requirements packages in
   let* file_version = Source.version source ".bun-version" in
   let declarations =
-    Request.defaults request id
-      (Package.optional ".bun-version" file_version @ List.concat requirements)
+    Package.optional ".bun-version" file_version @ List.concat requirements
   in
   let* requirements = Semver_image.requirements declarations in
   let* build_argv = Build_plan.argv [ "bun"; "run"; "build" ] in
   let* start =
-    Javascript.startup root ~override:(Request.start request)
+    Javascript.startup root ~override:request.Request.start
       ~script:[ "bun"; "run"; "start" ] ~main:[ "bun"; "run" ]
   in
   let* install =
-    Request.install_command request
+    Build_plan.argv
       ([ "bun"; "install" ]
       @
       if List.exists (Source.has source) locks then [ "--frozen-lockfile" ]
@@ -99,9 +98,4 @@ let prepare request source =
         Start start;
       ]
   in
-  {
-    Provider.plan;
-    packages = [ Semver_image.package id requirements resolved ];
-    metadata = [ ("nodeRuntime", "bun"); ("nodePackageManager", "bun") ];
-    resolution = Semver_image.encode resolved;
-  }
+  { Provider.plan; resolution = Semver_image.encode resolved }

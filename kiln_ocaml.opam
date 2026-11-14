@@ -9,7 +9,6 @@ homepage: "https://github.com/hughhan1/kiln"
 bug-reports: "https://github.com/hughhan1/kiln/issues"
 build: [["dune" "build" "-p" name "-j" jobs]]
 depends: [
-  "cmdliner" {= "2.1.1"}
   "ocaml" {= "5.5.1"}
   "dune" {>= "3.18"}
   "yojson" {= "3.0.0"}

@@ -149,20 +149,19 @@ let prepare request source =
   in
   let* file_version = Source.version source ".deno-version" in
   let declarations =
-    Request.defaults request id
-      (Package.optional ".deno-version" file_version @ List.concat declarations)
+    Package.optional ".deno-version" file_version @ List.concat declarations
   in
   let* requirements = Semver_image.requirements declarations in
   let* build_argv = Build_plan.argv [ "deno"; "task"; "build" ] in
   let* start =
-    match Request.start request with
+    match request.Request.start with
     | Some argv -> Ok (Some argv)
     | None when List.assoc_opt "start" tasks = Some true ->
         Result.map Option.some (Build_plan.argv [ "deno"; "task"; "start" ])
     | None -> Ok None
   in
   let* install =
-    Request.install_command request
+    Build_plan.argv
       ([ "deno"; "install" ] @ if locked then [ "--frozen" ] else [])
   in
   let* resolved =
@@ -205,9 +204,4 @@ let prepare request source =
         Start start;
       ]
   in
-  {
-    Provider.plan;
-    packages = [ Semver_image.package id requirements resolved ];
-    metadata = [];
-    resolution = Semver_image.encode resolved;
-  }
+  { Provider.plan; resolution = Semver_image.encode resolved }

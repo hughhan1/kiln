@@ -4,10 +4,10 @@
  (libraries kiln_planning kiln_providers kiln_io unix yojson))
 
 (tests
- (names bun deno go installer node pins planner python semver)
- (modules bun deno go installer node pins planner python semver)
+ (names bun deno go node pins planner python semver)
+ (modules bun deno go node pins planner python semver)
  (libraries contract_support digestif)
- (deps ../bin/main.exe ../install.sh ../kiln_ocaml.opam node-semver.json))
+ (deps ../kiln_ocaml.opam node-semver.json))
 
 (executable
  (name integration)
@@ -22,4 +22,4 @@
  (action
   (chdir
    %{workspace_root}
-   (run %{exe:integration.exe} %{exe:../bin/main.exe}))))
+   (run %{exe:integration.exe}))))

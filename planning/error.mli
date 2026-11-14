@@ -8,7 +8,6 @@ type t =
   | Conflict of string
   | Workspace_escape of string
   | Containment of string
-  | Missing_start
   | No_version of {
       tool : string;
       requirements : string;

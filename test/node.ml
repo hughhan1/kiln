@@ -64,16 +64,6 @@ let () =
       check "bundled npm"
         (selected "packageManager" plan = "npm"
         && selected "packageManagerVersion" plan = default_pin.Pins.npm);
-      let open Yojson.Basic.Util in
-      List.iter
-        (fun (name, source) ->
-          let package = package plan name in
-          check
-            (name ^ " default provenance")
-            (member "name" package = `String name
-            && member "requestedVersion" package = `Null
-            && member "source" package = `String source))
-        [ ("node", "kiln default"); ("npm", "bundled with Node") ];
       let dockerfile = Build_plan.dockerfile plan.Planner.plan in
       let position text =
         match String.find_first ~sub:text dockerfile with
@@ -86,10 +76,6 @@ let () =
       check "the emulated fallback and the source copy follow"
         (position {|--ignore-scripts|} < position {|"npm","install"]|}
         && position {|"npm","install"]|} < position {|COPY --exclude|});
-      check "the plan names the install path"
-        (`Assoc (Planner.info plan)
-        |> member "metadata" |> member "dependencyInstall"
-        = `String "native, emulated if a package has an install script");
       check "main startup" (startup plan = Some [ "node"; "main.js" ]));
   List.iter
     (fun (label, pkg) ->
@@ -100,12 +86,7 @@ let () =
             (not
                (contains
                   (Build_plan.dockerfile plan.Planner.plan)
-                  "$BUILDPLATFORM"));
-          check "the plan names the install path"
-            Yojson.Basic.Util.(
-              `Assoc (Planner.info plan)
-              |> member "metadata" |> member "dependencyInstall"
-              = `String "emulated")))
+                  "$BUILDPLATFORM"))))
     [
       ( "root install script stays under emulation",
         {|{"main":"main.js","scripts":{"postinstall":"true"}}|} );

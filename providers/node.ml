@@ -171,24 +171,22 @@ let load (request : Request.t) source =
     else Error (Error.Unsupported "only Node runtime is supported")
   in
   let node_declarations =
-    Request.defaults request "node"
-      (List.concat versions
-      @ Package.optional "package.json engines.node"
-          (List.assoc_opt "node" pkg.Javascript.engines)
-      @ Javascript.requests ~path:"package.json" pkg.Javascript.runtimes)
+    List.concat versions
+    @ Package.optional "package.json engines.node"
+        (List.assoc_opt "node" pkg.Javascript.engines)
+    @ Javascript.requests ~path:"package.json" pkg.Javascript.runtimes
   in
   let nodes_text = Package.versions node_declarations in
   let* nodes = Support.traverse node_request nodes_text in
   let* pm = selected_manager pkg source in
   let manager_declarations =
-    Request.defaults request (name pm)
-      (Javascript.requests ~path:"package.json" pkg.Javascript.managers)
+    Javascript.requests ~path:"package.json" pkg.Javascript.managers
   in
   let manager_text = Package.versions manager_declarations in
   let* manager_ranges = Support.traverse parse_range manager_text in
   let* build_argv = Build_plan.argv [ name pm; "run"; "build" ] in
   let* command =
-    Javascript.startup pkg ~override:(Request.start request)
+    Javascript.startup pkg ~override:request.Request.start
       ~script:[ name pm; "run"; "start" ]
       ~main:[ "node" ]
   in
@@ -197,7 +195,7 @@ let load (request : Request.t) source =
     else install_inputs source workspace packages
   in
   let+ install =
-    Request.install_command request
+    Build_plan.argv
       ([ name pm; "install" ]
       @
       match pm with
@@ -381,7 +379,7 @@ let unless test =
         in
         Run command
     | ( Copy _ | Workdir _ | Env _ | User _ | Entrypoint _ | Start _
-      | Prepend_path _ | Write _ ) as operation ->
+      | Prepend_path _ ) as operation ->
         Ok operation)
 
 let install_steps app copy_source =
@@ -459,25 +457,6 @@ let prepare request source =
   let+ plan = plan app r in
   {
     Provider.plan;
-    packages =
-      [
-        Package.resolve "node" app.node_declarations (Semver.show r.node);
-        Package.resolve
-          ~default_source:
-            (match r.pm with
-            | Npm -> "bundled with Node"
-            | Pnpm -> "kiln default")
-          (name r.pm) app.manager_declarations (Semver.show r.pm_version);
-      ];
-    metadata =
-      [
-        ( "dependencyInstall",
-          if native app r then
-            "native, emulated if a package has an install script"
-          else "emulated" );
-        ("nodeRuntime", "node");
-        ("nodePackageManager", name app.manager);
-      ];
     resolution =
       `Assoc
         [
