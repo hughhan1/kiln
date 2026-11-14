@@ -33,7 +33,8 @@ module type S = sig
       Multiple implementations may share a name. *)
 
   val exclude : string list
-  (** Directory/file basenames omitted throughout the source snapshot. *)
+  (** Directory/file basenames omitted throughout the source snapshot, besides
+      [Source.omitted]. *)
 
   val detect : Source.t -> (detection, Error.t) result
   (** Classify source evidence; explicit matches take precedence over fallbacks.

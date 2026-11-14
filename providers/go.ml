@@ -10,7 +10,7 @@ open Result.Syntax
 
 let id = "go"
 let public_name = id
-let exclude = [ "node_modules" ]
+let exclude = []
 
 let detect source =
   Ok

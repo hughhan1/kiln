@@ -10,7 +10,7 @@ module Error = Kiln_planning.Error
 
 let id = "bun"
 let public_name = "node"
-let exclude = [ "node_modules"; ".bun" ]
+let exclude = [ ".bun" ]
 let locks = [ "bun.lock"; "bun.lockb" ]
 
 let detect source =

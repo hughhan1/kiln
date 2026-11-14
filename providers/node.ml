@@ -330,7 +330,7 @@ let resolve app =
 
 let id = "node"
 let public_name = id
-let exclude = [ "node_modules" ]
+let exclude = []
 
 (* npm honours --libc from 10.4. A replaced install command always copies the
    whole source, and pnpm has no equivalent flags. *)
