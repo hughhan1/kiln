@@ -7,16 +7,22 @@ type prepared = private {
   detected : string list;
   packages : Package.t list;
   metadata : (string * string) list;
+  steps : Yojson.Basic.t option;
 }
 
 val prepare :
   Provider.selection -> Request.t -> Source.t -> (prepared, Error.t) result
 (** Prepare the selected provider's plan, then append the request's runtime
     variables and PATH additions to its final stage. Fail with [Missing_start]
-    when the request requires a startup the plan lacks. *)
+    when the request requires a startup the plan lacks; for a development
+    request, fail when the provider has no development steps for the app or they
+    include a PATH, COPY or FILE operation, which only an image runs. *)
 
 val encode : prepared -> string
-(** Serialize the Dockerfile together with preparation metadata. *)
+(** Serialize the Dockerfile together with preparation metadata and, for a
+    development request, its steps: [inputs], the source paths the install
+    reads, where ["."] is the whole source; [install] and [build], arrays of
+    argument vectors; and [start], one or null. *)
 
 val warnings : prepared -> string list
 (** Human-readable preparation warnings, also emitted in JSON metadata. *)

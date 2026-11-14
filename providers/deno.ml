@@ -203,6 +203,7 @@ let prepare request source =
   in
   {
     Provider.plan;
+    steps = None;
     packages = [ Semver_image.package id requirements resolved ];
     metadata = [];
     resolution = Semver_image.encode resolved;

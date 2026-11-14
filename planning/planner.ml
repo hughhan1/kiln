@@ -7,7 +7,33 @@ type prepared = {
   detected : string list;
   packages : Package.t list;
   metadata : (string * string) list;
+  steps : Yojson.Basic.t option;
 }
+
+let argv command = Json.string_array (Build_plan.arguments command)
+
+let commands =
+  Support.traverse (function
+    | Build_plan.Run command -> Ok (argv command)
+    | Build_plan.(
+        ( Copy _ | Workdir _ | Env _ | User _ | Entrypoint _ | Start _
+        | Prepend_path _ | Write _ )) ->
+        Error (Error.Unsupported "PATH, COPY and FILE commands in development"))
+
+let steps { Provider.inputs; install; build; start } =
+  let* install = commands install in
+  let+ build = commands build in
+  `Assoc
+    [
+      ( "inputs",
+        Json.string_array
+          (match inputs with
+          | Provider.Whole_source -> [ "." ]
+          | Provider.Manifests paths -> paths) );
+      ("install", `List install);
+      ("build", `List build);
+      ("start", Option.fold ~none:`Null ~some:argv start);
+    ]
 
 let prepare { Provider.provider = (module P); detected } (request : Request.t)
     source =
@@ -27,6 +53,12 @@ let prepare { Provider.provider = (module P); detected } (request : Request.t)
       (Build_plan.base output.Provider.plan)
       (Build_plan.operations output.Provider.plan @ runtime)
   in
+  let* steps =
+    match (request.Request.development, output.Provider.steps) with
+    | false, _ -> Ok None
+    | true, None -> Error (Error.Unsupported ("development with " ^ P.id))
+    | true, Some planned -> Result.map Option.some (Result.bind planned steps)
+  in
   if request.Request.error_missing_start && Build_plan.startup plan = None then
     Error Error.Missing_start
   else
@@ -37,6 +69,7 @@ let prepare { Provider.provider = (module P); detected } (request : Request.t)
         detected;
         packages = output.Provider.packages;
         metadata = output.Provider.metadata;
+        steps;
         resolution =
           `Assoc
             [ ("provider", `String P.id); ("data", output.Provider.resolution) ];
@@ -69,6 +102,9 @@ let info prepared =
     ("resolvedPackages", `Assoc (List.map Package.encode prepared.packages));
     ("resolution", prepared.resolution);
   ]
+  @ Option.fold ~none:[]
+      ~some:(fun steps -> [ ("steps", steps) ])
+      prepared.steps
 
 let failure error =
   [

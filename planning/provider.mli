@@ -2,6 +2,17 @@
     prepare its plan from the pinned toolchains. *)
 
 type detection = No_match | Fallback | Explicit
+type inputs = Whole_source | Manifests of string list
+
+type steps = {
+  inputs : inputs;
+  install : Build_plan.operation list;
+  build : Build_plan.operation list;
+  start : Build_plan.argv option;
+}
+(** What a development environment runs in the source directory: [install]
+    whenever [inputs], the files it reads or the whole source, change; then
+    [build], then [start]. *)
 
 type output = {
   plan : Build_plan.t;
@@ -10,6 +21,9 @@ type output = {
       *)
   metadata : (string * string) list;
   resolution : Yojson.Basic.t;  (** The selected toolchain pins. *)
+  steps : (steps, Error.t) result option;
+      (** What a development environment runs, or why this app has no
+          development steps; [None] when the provider has none. *)
 }
 
 module type S = sig

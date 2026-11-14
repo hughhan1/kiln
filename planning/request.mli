@@ -30,8 +30,10 @@ type t = private {
   config_file : string;
   variables : Build_plan.environment option;
   development : bool;
-      (** Leave server source out of the image, keeping dependencies and build
-          output. *)
+      (** Also plan what a development environment with Node.js, npm, pnpm and
+          uv runs in the source: lockfiles are not frozen, development
+          dependencies are installed, and a Python app installs and starts
+          through uv. *)
 }
 
 val decode : (string * Yojson.Basic.t) list -> (t, Error.t) result

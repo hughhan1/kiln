@@ -327,58 +327,55 @@ let () =
       in
       check "custom path used"
         (contains (Build_plan.dockerfile plan.Planner.plan) "echo nested"));
-  let project =
-    {|[project]
-name = "app"
-version = "1"
-dependencies = ["idna==3.10"]
-|}
-  in
-  let development = [ ("development", `Bool true) ] in
-  List.iter
-    (fun (name, files, source, project) ->
-      snapshot files (name ^ " development image leaves source out")
-        (fun root ->
-          let plain = recipe root [] and image = recipe root development in
-          check "only the flag excludes source"
-            ((not (contains plain source)) && contains image source);
-          Option.iter
-            (fun (marker, in_development) ->
-              check "the project is not installed"
-                (contains plain marker <> in_development
-                && contains image marker = in_development))
-            project))
+  let page = {|{"scripts":{"build":"vite build","start":"node server.js"}}|} in
+  let python =
     [
-      ( "pip",
-        [
-          ("pyproject.toml", project);
-          ("main.py", "");
-          ("package.json", {|{"scripts":{"build":"vite build"}}|});
-        ],
-        "--exclude=**/*.py ",
-        Some ("--no-deps", false) );
-      ( "Poetry",
-        [
-          ( "pyproject.toml",
-            project
-            ^ "[build-system]\nbuild-backend = \"poetry.core.masonry.api\"\n" );
-          ("main.py", "");
-        ],
-        "--exclude=**/*.py ",
-        Some ("--no-root", true) );
-      ( "Node",
-        [ ("package.json", {|{"main":"[id].js"}|}); ("[id].js", "") ],
-        "--exclude=?id?.js ",
-        None );
+      ( "pyproject.toml",
+        "[project]\n\
+         name = \"app\"\n\
+         version = \"1\"\n\
+         requires-python = \">=3.12\"\n" );
+      ("server.py", "");
+    ]
+  in
+  let uv_lock = ("uv.lock", "version = 1\nrequires-python = \">=3.12\"\n") in
+  let serve =
+    [
+      ("start", Json.string_array [ "python"; "-m"; "holon.serve"; "server.py" ]);
+    ]
+  in
+  List.iter
+    (fun (name, files, fields, expected) ->
+      snapshot files ("development steps: " ^ name) (fun root ->
+          let planned =
+            Kiln_io.Driver.plan
+              (request root (("development", `Bool true) :: fields))
+          in
+          match (planned, expected) with
+          | Ok response, Some steps ->
+              check "the steps"
+                (Yojson.Basic.Util.member "steps"
+                   (Yojson.Basic.from_string response)
+                = Yojson.Basic.from_string steps)
+          | Error _, None -> ()
+          | Ok response, None -> failwith ("planned: " ^ response)
+          | Error error, Some _ -> failwith (Kiln_planning.Error.show error)))
+    [
+      ( "pnpm leaves its lockfile unfrozen, and an npm config reads the source",
+        [ ("package.json", page); ("pnpm-lock.yaml", ""); (".npmrc", "") ],
+        [],
+        Some
+          {|{"inputs":["."],"install":[["pnpm","install"]],"build":[["pnpm","run","build"]],"start":["pnpm","run","start"]}|}
+      );
+      ( "uv with a page",
+        uv_lock :: ("package.json", page)
+        :: ("package-lock.json", "{}")
+        :: python,
+        serve,
+        Some
+          {|{"inputs":["pyproject.toml","uv.lock","package-lock.json","package.json"],"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]],"start":["uv","run","--no-sync","python","-m","holon.serve","server.py"]}|}
+      );
+      ("Python without uv.lock", python, serve, None);
+      ("Go", [ ("go.mod", "module example\ngo 1.27\n") ], [], None);
     ];
-  snapshot files "development exclusions fit BuildKit's line limit" (fun root ->
-      for i = 1 to 2000 do
-        write root
-          (Printf.sprintf "%04d-a-rather-long-source-file-name.js" i)
-          ""
-      done;
-      check "every line fits"
-        (List.for_all
-           (fun line -> String.length line < 65536)
-           (String.split_on_char '\n' (recipe root development))));
   finish ()

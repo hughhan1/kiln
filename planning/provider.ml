@@ -1,12 +1,21 @@
 open Result.Syntax
 
 type detection = No_match | Fallback | Explicit
+type inputs = Whole_source | Manifests of string list
+
+type steps = {
+  inputs : inputs;
+  install : Build_plan.operation list;
+  build : Build_plan.operation list;
+  start : Build_plan.argv option;
+}
 
 type output = {
   plan : Build_plan.t;
   packages : Package.t list;
   metadata : (string * string) list;
   resolution : Yojson.Basic.t;
+  steps : (steps, Error.t) result option;
 }
 
 module type S = sig

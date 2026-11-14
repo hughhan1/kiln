@@ -58,7 +58,7 @@ and manager = Poetry | Pdm
 
 let manager_name = function Poetry -> "poetry" | Pdm -> "pdm"
 
-type inputs = Whole_source | Manifests of string list
+type inputs = Provider.inputs = Whole_source | Manifests of string list
 
 type application = {
   requirements : Version.requirement list;
@@ -71,7 +71,7 @@ type application = {
   installable : bool;
   start : Build_plan.argv option;
   build : Build_plan.operation list;
-  server : string list;
+  page : Provider.steps;
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   install_override : Build_plan.argv option;
 }
@@ -426,7 +426,6 @@ let load request source =
           ( Uv_install { version; image },
             Option.value ~default:(Option.is_some build_system) uv_package )
   in
-  let installable = installable && not request.Request.development in
   let* workspace =
     Toml.field root [ "tool"; "uv"; "workspace" ] Otoml.get_value
   in
@@ -458,10 +457,7 @@ let load request source =
         (Whole_source | Manifests _) ) ->
         None
   in
-  let server = if request.Request.development then [ "*.py" ] else [] in
-  let* frontend =
-    Node.frontend ~exclude:(server @ manifests @ exclude) source
-  in
+  let* frontend, page = Node.frontend ~exclude:(manifests @ exclude) source in
   let* scripts =
     Toml.table root [ "project"; "scripts" ] (Otoml.get_string ~strict:true)
   in
@@ -492,7 +488,7 @@ let load request source =
       install_override = request.Request.install;
       install_commands = Request.install_commands request;
       build = Request.build_command request frontend;
-      server;
+      page;
     }
 
 let resolve app =
@@ -777,8 +773,7 @@ let plan app resolved =
         in
         let+ build =
           stage (Stage dependencies)
-            (Source.copy ~exclude:(app.server @ exclude) [ "." ] "/app/"
-            :: (finish @ app.build))
+            (Source.copy ~exclude [ "." ] "/app/" :: (finish @ app.build))
         in
         (dependencies, build, finish)
   in
@@ -818,13 +813,37 @@ let plan app resolved =
      ]
     @ project
     @ [
-        copy ~owner:(1000, 1000)
-          ~exclude:(Source.everywhere app.server)
-          build [ "/app/" ] "/app/";
+        copy ~owner:(1000, 1000) build [ "/app/" ] "/app/";
         User (1000, 1000);
         Entrypoint None;
         Start app.start;
       ])
+
+let development request app =
+  match app.install with
+  | Uv_install _ ->
+      let* sync = Request.install_command request [ "uv"; "sync" ] in
+      let+ start =
+        match app.start with
+        | None -> Ok None
+        | Some start ->
+            Result.map Option.some
+              (Build_plan.argv
+                 ([ "uv"; "run"; "--no-sync" ] @ Build_plan.arguments start))
+      in
+      {
+        Provider.inputs =
+          (match (app.inputs, app.page.Provider.inputs) with
+          | Manifests python, Manifests page -> Manifests (python @ page)
+          | Whole_source, _ | _, Whole_source -> Whole_source);
+        install =
+          app.install_commands [ Build_plan.Run sync ]
+          @ app.page.Provider.install;
+        build = Request.build_command request app.page.Provider.build;
+        start;
+      }
+  | Pip_install _ | Manager_install _ ->
+      Json.metadata "Python" "development installs with uv; run uv lock"
 
 let prepare request source =
   let* app = load request source in
@@ -850,6 +869,7 @@ let prepare request source =
   in
   {
     Provider.plan;
+    steps = Some (development request app);
     packages =
       Package.resolve "python" app.python_declarations (Version.show r.python)
       :: packages;

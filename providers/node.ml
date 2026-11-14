@@ -72,7 +72,7 @@ let workspace bytes =
   if List.exists (fun key -> key <> "packages") keys then With_settings
   else Packages_only
 
-type inputs = Whole_source | Manifests of string list
+type inputs = Provider.inputs = Whole_source | Manifests of string list
 
 type application = {
   nodes : node_request list;
@@ -85,7 +85,6 @@ type application = {
   install_commands : Build_plan.operation list -> Build_plan.operation list;
   inputs : inputs;
   build : Build_plan.operation list;
-  overlaid : string list;
   command : Build_plan.argv option;
 }
 
@@ -141,15 +140,6 @@ let install_inputs source workspace packages =
                "pnpm-workspace.yaml";
              ])
          source.Source.files)
-
-let exclusion_character = function
-  | ( 'a' .. 'z'
-    | 'A' .. 'Z'
-    | '0' .. '9'
-    | '/' | '.' | '_' | '-'
-    | '\128' .. '\255' ) as c ->
-      c
-  | _ -> '?'
 
 let load (request : Request.t) source =
   let* packages = Javascript.load source in
@@ -227,10 +217,6 @@ let load (request : Request.t) source =
       Request.build_command request
         (if Javascript.has_script pkg "build" then [ Build_plan.Run build_argv ]
          else []);
-    overlaid =
-      (if request.Request.development then
-         List.map (String.map exclusion_character) source.Source.files
-       else []);
     command;
   }
 
@@ -444,11 +430,22 @@ let plan app r =
           ~exclude:[ "*"; "!**/node_modules" ]
           build [ "/app/" ] "/app/";
         copy ~owner:(10001, 10001)
-          ~exclude:("**/node_modules" :: ".kiln-emulate" :: app.overlaid)
+          ~exclude:[ "**/node_modules"; ".kiln-emulate" ]
           build [ "/app/" ] "/app/";
         User (10001, 10001);
         Start app.command;
       ])
+
+let development request app =
+  let+ install =
+    Request.install_command request [ name app.manager; "install" ]
+  in
+  {
+    Provider.inputs = app.inputs;
+    install = app.install_commands [ Build_plan.Run install ];
+    build = app.build;
+    start = app.command;
+  }
 
 let detect source =
   if not (Source.has source "package.json") then Ok Provider.No_match
@@ -470,6 +467,7 @@ let prepare request source =
   let+ plan = plan app r in
   {
     Provider.plan;
+    steps = Some (development request app);
     packages =
       [
         Package.resolve "node" app.node_declarations (Semver.show r.node);
@@ -506,18 +504,25 @@ let prepare request source =
   }
 
 let frontend ~exclude source =
-  if not (Source.has source "package.json") then Ok []
+  let none =
+    ( [],
+      { Provider.inputs = Manifests []; install = []; build = []; start = None }
+    )
+  in
+  if not (Source.has source "package.json") then Ok none
   else
     let* request = Request.decode [ ("source", `String "") ] in
     let* app = load request source in
     match app.build with
-    | [] -> Ok []
+    | [] -> Ok none
     | _ :: _ ->
         let open Build_plan in
         let* r = resolve app in
         let* base = toolchain r (Native r.builder) in
-        let+ output =
+        let* output =
           stage (Stage base)
             (install_steps app (Source.copy ~exclude [ "." ] ".") @ app.build)
         in
-        [ copy ~exclude:[ "**/node_modules" ] output [ "/app/" ] "/app/" ]
+        let+ steps = development request app in
+        ( [ copy ~exclude:[ "**/node_modules" ] output [ "/app/" ] "/app/" ],
+          steps )

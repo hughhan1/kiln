@@ -85,7 +85,7 @@ let prepare request source =
   let* install =
     Request.install_command request [ "go"; "mod"; "download"; "all" ]
   in
-  let* frontend =
+  let* frontend, _ =
     Node.frontend ~exclude:([ "*.go"; "go.mod"; "go.sum" ] @ exclude) source
   in
   let* build =
@@ -132,6 +132,7 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
   in
   {
     Provider.plan;
+    steps = None;
     packages = [ Semver_image.package id requirements compiler ];
     metadata = [];
     resolution =
