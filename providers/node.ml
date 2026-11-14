@@ -102,6 +102,21 @@ let selected_manager pkg source =
       then manager first.Javascript.name
       else Error (Error.Conflict "explicit package managers")
 
+let manifest path =
+  List.mem (Filename.basename path)
+    [
+      "package.json";
+      "package-lock.json";
+      "npm-shrinkwrap.json";
+      "pnpm-lock.yaml";
+      "pnpm-workspace.yaml";
+    ]
+
+let configures_install path =
+  List.mem (Filename.basename path)
+    [ "binding.gyp"; ".npmrc"; ".pnpmfile.cjs"; "pnpmfile.cjs" ]
+  || String.starts_with ~prefix:"patches/" path
+
 let install_inputs source workspace packages =
   let requires_source (_, package) =
     package.Javascript.needs_source
@@ -121,27 +136,10 @@ let install_inputs source workspace packages =
     source.Source.links
     || workspace = Some With_settings
     || List.exists requires_source packages
-    || List.exists
-         (fun path ->
-           List.mem (Filename.basename path)
-             [ "binding.gyp"; ".npmrc"; ".pnpmfile.cjs"; "pnpmfile.cjs" ]
-           || String.starts_with ~prefix:"patches/" path)
-         source.Source.files
+    || List.exists configures_install source.Source.files
   in
   if full then Whole_source
-  else
-    Manifests
-      (List.filter
-         (fun path ->
-           List.mem (Filename.basename path)
-             [
-               "package.json";
-               "package-lock.json";
-               "npm-shrinkwrap.json";
-               "pnpm-lock.yaml";
-               "pnpm-workspace.yaml";
-             ])
-         source.Source.files)
+  else Manifests (List.filter manifest source.Source.files)
 
 let load (request : Request.t) source =
   let* packages = Javascript.load source in
@@ -442,7 +440,7 @@ let prepare request source =
 
 let develop source =
   if not (Source.has source "package.json") then
-    Ok { Provider.install = []; build = [] }
+    Ok { Provider.inputs = []; install = []; build = [] }
   else
     let* pkg = Javascript.root source in
     let* pm = selected_manager pkg source in
@@ -452,7 +450,14 @@ let develop source =
         Result.map List.singleton (Build_plan.argv [ name pm; "run"; "build" ])
       else Ok []
     in
-    { Provider.install = [ install ]; build }
+    {
+      Provider.inputs =
+        List.filter
+          (fun path -> manifest path || configures_install path)
+          source.Source.files;
+      install = [ install ];
+      build;
+    }
 
 let frontend ~exclude source =
   if not (Source.has source "package.json") then Ok []

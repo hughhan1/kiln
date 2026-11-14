@@ -3,9 +3,13 @@
 
 type detection = No_match | Fallback | Explicit
 
-type steps = { install : Build_plan.argv list; build : Build_plan.argv list }
-(** What a development environment runs in the source directory: [install], then
-    [build]. *)
+type steps = {
+  inputs : string list;
+  install : Build_plan.argv list;
+  build : Build_plan.argv list;
+}
+(** What a development environment runs in the source directory: [install]
+    whenever a file in [inputs] changes, then [build]. *)
 
 module type S = sig
   val id : string

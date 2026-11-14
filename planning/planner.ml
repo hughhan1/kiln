@@ -1,7 +1,7 @@
 open Result.Syntax
 
 let develop (module P : Provider.S) source =
-  let+ { Provider.install; build } = P.develop source in
+  let+ { Provider.inputs; install; build } = P.develop source in
   let commands steps =
     `List
       (List.map
@@ -9,7 +9,12 @@ let develop (module P : Provider.S) source =
          steps)
   in
   Json.encode
-    (`Assoc [ ("install", commands install); ("build", commands build) ])
+    (`Assoc
+       [
+         ("inputs", Json.string_array inputs);
+         ("install", commands install);
+         ("build", commands build);
+       ])
 
 let output = "/tmp/kiln-run"
 

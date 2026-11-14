@@ -6,8 +6,9 @@ val prepare :
     additions to its final stage. *)
 
 val develop : Provider.t -> Source.t -> (string, Error.t) result
-(** The JSON of what a development environment runs in the source: [install],
-    then [build], each an array of argument vectors. *)
+(** The JSON of what a development environment runs in the source: [inputs], the
+    source paths whose change reruns the install; then [install] and [build],
+    each an array of argument vectors. *)
 
 val encode : Build_plan.t -> string
 (** The JSON of the plan: its [dockerfile]. *)

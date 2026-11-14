@@ -223,20 +223,25 @@ let () =
           ("pnpm-lock.yaml", "");
         ],
         Some
-          {|{"install":[["pnpm","install"]],"build":[["pnpm","run","build"]]}|}
+          {|{"inputs":["package.json","pnpm-lock.yaml"],"install":[["pnpm","install"]],"build":[["pnpm","run","build"]]}|}
       );
-      ( "uv with a page, whose railpack.json does not apply",
+      ( "uv with a page, reinstalled when a manifest changes, and whose \
+         railpack.json does not apply",
         uv_lock :: ("package.json", page)
+        :: (".python-version", "3.13\n")
+        :: (".npmrc", "")
         :: ( "railpack.json",
              {|{"steps":{"install":{"commands":["...",{"path":"/opt/node/bin"}]},"build":{"commands":["vite build"]}}}|}
            )
         :: python,
         Some
-          {|{"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]]}|}
+          {|{"inputs":[".python-version","pyproject.toml","uv.lock",".npmrc","package.json"],"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]]}|}
       );
       ( "uv alone",
         uv_lock :: python,
-        Some {|{"install":[["uv","sync"]],"build":[]}|} );
+        Some
+          {|{"inputs":["pyproject.toml","uv.lock"],"install":[["uv","sync"]],"build":[]}|}
+      );
       ("Python without uv.lock", python, None);
       ( "Go whose package.json declares its package manager and builds nothing",
         [
@@ -245,7 +250,9 @@ let () =
             {|{"packageManager":"pnpm@11.25.0","dependencies":{"holon-sh":"^0.0.1"}}|}
           );
         ],
-        Some {|{"install":[["pnpm","install"]],"build":[]}|} );
+        Some
+          {|{"inputs":["package.json"],"install":[["pnpm","install"]],"build":[]}|}
+      );
       ("Bun", [ ("package.json", {|{"packageManager":"bun@1"}|}) ], None);
     ];
   finish ()

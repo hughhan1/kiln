@@ -741,7 +741,17 @@ let develop source =
   else
     let* sync = Build_plan.argv [ "uv"; "sync" ] in
     let+ page = Node.develop source in
-    { page with Provider.install = sync :: page.Provider.install }
+    {
+      page with
+      Provider.inputs =
+        List.filter
+          (fun path ->
+            Filename.basename path = "pyproject.toml"
+            || List.mem path [ "uv.lock"; "uv.toml"; ".python-version" ])
+          source.Source.files
+        @ page.Provider.inputs;
+      install = sync :: page.Provider.install;
+    }
 
 let prepare request source =
   let* app = load request source in
