@@ -78,8 +78,8 @@ let source cancelled root exclude files links =
             resolve path));
   }
 
-let prepare ?(providers = Kiln_providers.Builtin.all)
-    ?(cancelled = fun () -> false) fields =
+let run ?(providers = Kiln_providers.Builtin.all) ?(cancelled = fun () -> false)
+    plan fields =
   let* request = Request.decode fields in
   filesystem @@ fun () ->
   let* () = check cancelled in
@@ -104,11 +104,17 @@ let prepare ?(providers = Kiln_providers.Builtin.all)
     let exclude = ".git" :: P.exclude in
     let* files, links = walk cancelled exclude root "" in
     let source = source cancelled root exclude files links in
-    let* prepared = Planner.prepare selection request source in
+    let* planned = plan selection request source in
     let+ () = check cancelled in
-    prepared
+    planned
+
+let prepare ?providers ?cancelled = run ?providers ?cancelled Planner.prepare
 
 let plan ?providers ?cancelled bytes =
   let* fields = Json.decode "request" Json.object_ bytes in
-  let+ prepared = prepare ?providers ?cancelled fields in
-  Planner.encode prepared
+  run ?providers ?cancelled
+    (fun selection request source ->
+      if request.Request.development then
+        Planner.develop selection request source
+      else Result.map Planner.encode (Planner.prepare selection request source))
+    fields

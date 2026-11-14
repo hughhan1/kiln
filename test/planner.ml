@@ -354,8 +354,7 @@ let () =
           match (planned, expected) with
           | Ok response, Some steps ->
               check "the steps"
-                (Yojson.Basic.Util.member "steps"
-                   (Yojson.Basic.from_string response)
+                (Yojson.Basic.from_string response
                 = Yojson.Basic.from_string steps)
           | Error _, None -> ()
           | Ok response, None -> failwith ("planned: " ^ response)
@@ -376,6 +375,12 @@ let () =
           {|{"inputs":["pyproject.toml","uv.lock","package-lock.json","package.json"],"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]],"start":["uv","run","--no-sync","python","-m","holon.serve","server.py"]}|}
       );
       ("Python without uv.lock", python, serve, None);
-      ("Go", [ ("go.mod", "module example\ngo 1.27\n") ], [], None);
+      ( "Go with a page",
+        [ ("go.mod", "module example\ngo 1.27\n"); ("package.json", page) ],
+        [],
+        Some
+          {|{"inputs":["package.json"],"install":[["npm","install"]],"build":[["npm","run","build"]],"start":["go","run","."]}|}
+      );
+      ("Bun", [ ("package.json", {|{"packageManager":"bun@1"}|}) ], [], None);
     ];
   finish ()
