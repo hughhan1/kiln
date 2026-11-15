@@ -27,21 +27,27 @@ let header text =
         | Some i -> String.sub line (i + 2) (String.length line - i - 2) :: rest
         )
   in
-  let rec scan constrained = function
-    | [] -> (constrained, None)
+  let rec scan constraints = function
+    | [] -> (constraints, None)
     | line :: rest -> (
         let line = String.trim line in
         let starts prefix = String.starts_with ~prefix line in
-        if line = "" then scan constrained rest
-        else if starts "//" then
-          scan (constrained || starts "//go:build" || starts "// +build") rest
-        else if starts "/*" then scan constrained (close (line :: rest))
-        else
-          match words line with
-          | "package" :: name :: _ -> (constrained, Some name)
-          | _ -> (constrained, None))
+        let expression prefix =
+          if starts prefix then
+            Some (String.trim (String.drop_first (String.length prefix) line))
+          else None
+        in
+        match List.find_map expression [ "//go:build"; "// +build" ] with
+        | Some build -> scan (build :: constraints) rest
+        | None -> (
+            if line = "" || starts "//" then scan constraints rest
+            else if starts "/*" then scan constraints (close (line :: rest))
+            else
+              match words line with
+              | "package" :: name :: _ -> (constraints, Some name)
+              | _ -> (constraints, None)))
   in
-  scan false (String.split_on_char '\n' text)
+  scan [] (String.split_on_char '\n' text)
 
 let detect source =
   if not (Source.has source "go.mod") then Ok Provider.No_match
@@ -56,14 +62,15 @@ let detect source =
         (fun path -> Result.map header (source.Source.read path))
         (List.filter root source.Source.files)
     in
-    match
-      List.filter_map
-        (fun (constrained, name) -> if constrained then None else name)
-        headers
-    with
-    | _ :: _ as names when List.for_all (String.equal "main") names ->
-        Provider.Explicit
-    | _ -> Provider.No_match
+    let main (constraints, name) =
+      name = Some "main" && not (List.mem "ignore" constraints)
+    in
+    let library (constraints, name) =
+      constraints = [] && Option.is_some name && name <> Some "main"
+    in
+    if List.exists main headers && not (List.exists library headers) then
+      Provider.Explicit
+    else Provider.No_match
 
 let directive name lines =
   let values =

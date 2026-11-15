@@ -50,21 +50,37 @@ let () =
           ("go.mod", "module example\ngo 1.27\n"); ("main.go", "package main\n");
         ] );
     ];
-  snapshot
+  List.iter
+    (fun (name, files, go) ->
+      snapshot (("go.mod", "module example\ngo 1.27\n") :: files) name
+        (fun root ->
+          let recipe = recipe root [] in
+          check
+            (if go then "with Go's image" else "with Node's image and not Go's")
+            (contains recipe "docker.io/library/golang@" = go
+            && (go || contains recipe "docker.io/library/node@"))))
     [
-      ("go.mod", "module example\ngo 1.27\n");
-      ( "library.go",
-        "// Package library is imported, not run.\npackage library\n" );
-      ("generate.go", "//go:build ignore\n\npackage main\n");
-      ("server.js", "");
-      ("package.json", {|{"scripts":{"build":"vite build"}}|});
-    ]
-    "a Go library beside a Node server plans as Node"
-    (fun root ->
-      let recipe = recipe root [] in
-      check "with Node's image and not Go's"
-        (contains recipe "docker.io/library/node@"
-        && not (contains recipe "docker.io/library/golang@")));
+      ("a root main package is Go", [ ("main.go", "package main\n") ], true);
+      ( "a main package beside a constrained tools file is Go",
+        [
+          ("main.go", "package main\n");
+          ("tools.go", "//go:build tools\n\npackage tools\n");
+        ],
+        true );
+      ( "a main package built only for Linux is Go",
+        [ ("server_linux.go", "//go:build linux\n\npackage main\n") ],
+        true );
+      ( "a Go library beside an ignored generator and a Node server plans as \
+         Node",
+        [
+          ( "library.go",
+            "// Package library is imported, not run.\npackage library\n" );
+          ("generate.go", "//go:build ignore\n\npackage main\n");
+          ("server.js", "");
+          ("package.json", {|{"scripts":{"build":"vite build"}}|});
+        ],
+        false );
+    ];
   snapshot files "the C API returns the recipe" (fun root ->
       check "its dockerfile alone"
         (Yojson.Basic.from_string (ok (Kiln_io.Driver.plan (request root [])))
