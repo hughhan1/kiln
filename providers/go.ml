@@ -1,5 +1,4 @@
 module Build_plan = Kiln_planning.Build_plan
-module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
 module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
@@ -182,8 +181,8 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
            ];
          Source.copy ~exclude [ "." ] "/app/";
        ]
-      @ Commands.expand request.Request.install_steps [ Run install ]
-      @ Commands.expand request.Request.build (frontend @ [ Run build ]))
+      @ [ Run install ]
+      @ if Request.builds request then frontend @ [ Run build ] else [])
   in
   stage (Image runtime)
     [

@@ -24,13 +24,11 @@ let () =
       ("main.py", "");
       ("package.json", {|{"main":"main.js","scripts":{"build":"vite build"}}|});
     ]
-    "provider selection"
+    "a railpack.json is not read"
     (fun root ->
       write root "railpack.json" {|{"provider":"node"}|};
-      check "configured provider selected"
-        (not (contains (recipe root []) "docker.io/library/python@"));
-      write root "railpack.json" {|{"provider":"unknown"}|};
-      check "unknown provider rejected" (Result.is_error (prepare root [])));
+      check "the source's own provider plans it"
+        (contains (recipe root []) "docker.io/library/python@"));
   List.iter
     (fun (provider, image, files) ->
       let page =
@@ -74,18 +72,7 @@ let () =
   snapshot [] "unknown application" (fun root ->
       check "no implicit application fixture"
         (Result.is_error (prepare root [])));
-  snapshot
-    (files
-    @ [
-        ( "railpack.json",
-          {|{
-    // Configuration in JSONC syntax.
-    "provider": "node",
-  }|}
-        );
-      ])
-    "native startup and JSONC configuration"
-    (fun root ->
+  snapshot files "native startup" (fun root ->
       let argv = [ "/launcher"; "with spaces"; "\"quoted\""; "" ] in
       check
         "native launcher argv overrides application startup without shell \
@@ -94,51 +81,6 @@ let () =
            (recipe root
               [ ("image", `Assoc [ ("start", Json.string_array argv) ]) ])
            ("CMD " ^ Json.encode (Json.string_array argv))));
-  snapshot
-    [
-      ( "package.json",
-        {|{"main":"main.js","scripts":{"build":"echo inherited"}}|} );
-    ]
-    "build command inheritance"
-    (fun root ->
-      List.iter
-        (fun (commands, inherited) ->
-          write root "railpack.json"
-            ("{\"steps\":{\"build\":{" ^ commands ^ "}}}");
-          check commands
-            (contains (recipe root []) {|RUN ["npm","run","build"]|} = inherited))
-        [
-          ("", true);
-          ({|"commands":[]|}, false);
-          ({|"commands":["..."]|}, true);
-          ({|"commands":[{"cmd":"..."}]|}, true);
-          ({|"commands":[{"cmd":"sh -c '...'"}]|}, true);
-        ]);
-  snapshot files "inherited install follows earlier commands" (fun root ->
-      write root "railpack.json"
-        {|{"steps":{"install":{"commands":["echo before","..."]}}}|};
-      let recipe = recipe root [] in
-      let position line = Option.get (String.find_first ~sub:line recipe) in
-      check "inherited install follows earlier commands"
-        (position {|RUN ["/bin/sh","-c","echo before"]|}
-        < position {|"npm","install"]|}));
-  snapshot files "invalid configuration is rejected" (fun root ->
-      let reject config =
-        write root "railpack.json" config;
-        check config (Result.is_error (prepare root []))
-      in
-      List.iter reject
-        [
-          {|{"deploy":{"startCommand":"echo start"}}|};
-          {|{"steps":{"build":{"inputs":[]}}}|};
-          {|{"steps":{"build":{"commands":[{"cmd":"'unclosed"}]}}}|};
-          {|{"steps":{"build":{"commands":[{"cmd":"echo ignored","path":"/tools"}]}}}|};
-          {|{"steps":{"build":{"commands":["COPY:only-source"]}}}|};
-          {|{"steps":{"build":{"commands":[{"src":"","dest":"copy.js"}]}}}|};
-          {|{"steps":{"build":{"commands":[{"src":"main.js","dest":"copy.js","image":"bad image"}]}}}|};
-          {|{"steps":{"build":{"commands":["PATH:/tools\rINJECT"]}}}|};
-          {|{"steps":{"build":{"commands":[" "]}}}|};
-        ]);
   snapshot files "invalid request is rejected" (fun root ->
       List.iter
         (fun fields ->
@@ -244,15 +186,10 @@ let () =
         Some
           {|{"inputs":["package.json","pnpm-lock.yaml"],"install":[["pnpm","install"]],"build":[["pnpm","run","build"]]}|}
       );
-      ( "uv with a page, reinstalled when a manifest changes, and whose \
-         railpack.json does not apply",
+      ( "uv with a page, reinstalled when a manifest changes",
         uv_lock :: ("package.json", page)
         :: (".python-version", "3.13\n")
-        :: (".npmrc", "")
-        :: ( "railpack.json",
-             {|{"steps":{"install":{"commands":["...",{"path":"/opt/node/bin"}]},"build":{"commands":["vite build"]}}}|}
-           )
-        :: python,
+        :: (".npmrc", "") :: python,
         Some
           {|{"inputs":[".python-version","pyproject.toml","uv.lock",".npmrc","package.json"],"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]]}|}
       );

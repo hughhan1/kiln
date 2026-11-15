@@ -20,7 +20,7 @@ end
 
 type t = (module S)
 
-let select providers ~requested source =
+let select providers source =
   let* matches =
     Support.traverse
       (fun ((module P : S) as provider) ->
@@ -28,36 +28,22 @@ let select providers ~requested source =
         (evidence, provider))
       providers
   in
-  let strongest matches =
-    let only evidence = List.filter (fun (e, _) -> e = evidence) matches in
+  let only evidence = List.filter (fun (e, _) -> e = evidence) matches in
+  let strongest =
     match only Explicit with [] -> only Fallback | explicit -> explicit
   in
-  let candidates =
-    match requested with
-    | None ->
-        let strongest = strongest matches in
-        List.filter
-          (fun (_, (module P : S)) ->
-            not
-              (List.exists
-                 (fun (_, (module Q : S)) -> List.mem P.public_name Q.includes)
-                 strongest))
-          strongest
-    | Some name -> (
-        let candidates =
-          List.filter (fun (_, (module P : S)) -> P.public_name = name) matches
-        in
-        match strongest candidates with [] -> candidates | found -> found)
-  in
-  match candidates with
+  match
+    List.filter
+      (fun (_, (module P : S)) ->
+        not
+          (List.exists
+             (fun (_, (module Q : S)) -> List.mem P.public_name Q.includes)
+             strongest))
+      strongest
+  with
   | [ (_, provider) ] -> Ok provider
-  | [] ->
-      Error
-        (Error.Unsupported
-           (Option.fold ~none:"no provider detected"
-              ~some:(fun name -> "provider " ^ name)
-              requested))
-  | _ :: _ :: _ ->
+  | [] -> Error (Error.Unsupported "no provider detected")
+  | _ :: _ :: _ as candidates ->
       Error
         (Error.Conflict
            ("providers: "

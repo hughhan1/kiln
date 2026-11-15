@@ -85,8 +85,8 @@ let directory path =
     let root = Unix.realpath path in
     Ok (root, List.sort String.compare (Array.to_list (Sys.readdir root)))
 
-let planned cancelled providers ~requested root probe plan =
-  let* provider = Provider.select providers ~requested probe in
+let planned cancelled providers root probe plan =
+  let* provider = Provider.select providers probe in
   let (module P : Provider.S) = provider in
   let exclude = Source.omitted @ P.exclude in
   let* files, links = walk cancelled exclude root "" in
@@ -100,16 +100,15 @@ let prepare ?(providers = Kiln_providers.Builtin.all)
   filesystem @@ fun () ->
   let* () = check cancelled in
   let* root, files = directory request.Request.source in
-  let probe = source cancelled root [ ".git" ] files false in
-  let* request = Request.configure request probe in
-  planned cancelled providers ~requested:request.Request.provider root probe
-    (fun provider source -> Planner.prepare provider request source)
+  planned cancelled providers root
+    (source cancelled root [ ".git" ] files false) (fun provider source ->
+      Planner.prepare provider request source)
 
 let develop providers cancelled path =
   filesystem @@ fun () ->
   let* () = check cancelled in
   let* root, files = directory path in
-  planned cancelled providers ~requested:None root
+  planned cancelled providers root
     (source cancelled root [ ".git" ] files false)
     Planner.develop
 
