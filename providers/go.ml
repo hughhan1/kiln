@@ -4,6 +4,7 @@ module Json = Kiln_planning.Json
 module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
+module Support = Kiln_planning.Support
 module Semver = Kiln_planning.Semver
 module Error = Kiln_planning.Error
 open Result.Syntax
@@ -13,9 +14,79 @@ let public_name = id
 let includes = [ "node" ]
 let exclude = []
 
+let package_name text start =
+  let keyword = "package" in
+  let length = String.length text in
+  let after = start + String.length keyword in
+  let identifier c =
+    match c with
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+    | _ -> false
+  in
+  if
+    after < length
+    && String.sub text start (String.length keyword) = keyword
+    && String.contains " \t" text.[after]
+  then
+    let rec first i =
+      if i < length && String.contains " \t" text.[i] then first (i + 1) else i
+    in
+    let begin_ = first after in
+    let rec last i =
+      if i < length && identifier text.[i] then last (i + 1) else i
+    in
+    match last begin_ - begin_ with
+    | 0 -> None
+    | size -> Some (String.sub text begin_ size)
+  else None
+
+let header text =
+  let length = String.length text in
+  let at i prefix =
+    i + String.length prefix <= length
+    && String.sub text i (String.length prefix) = prefix
+  in
+  let rec scan i constrained =
+    if i >= length then (constrained, None)
+    else if String.contains " \t\r\n" text.[i] then scan (i + 1) constrained
+    else if at i "//" then
+      let stop =
+        Option.value (String.index_from_opt text i '\n') ~default:length
+      in
+      scan stop (constrained || at i "//go:build" || at i "// +build")
+    else if at i "/*" then
+      let rec close j =
+        if j + 1 >= length then length
+        else if text.[j] = '*' && text.[j + 1] = '/' then j + 2
+        else close (j + 1)
+      in
+      scan (close (i + 2)) constrained
+    else (constrained, package_name text i)
+  in
+  scan 0 false
+
 let detect source =
-  Ok
-    (if Source.has source "go.mod" then Provider.Explicit else Provider.No_match)
+  if not (Source.has source "go.mod") then Ok Provider.No_match
+  else
+    let root path =
+      Filename.extension path = ".go"
+      && (not (String.contains path '/'))
+      && not (Filename.check_suffix path "_test.go")
+    in
+    let+ headers =
+      Support.traverse
+        (fun path -> Result.map header (source.Source.read path))
+        (List.filter root source.Source.files)
+    in
+    match
+      List.filter_map
+        (fun (constrained, name) -> if constrained then None else name)
+        headers
+    with
+    | [] -> Provider.No_match
+    | names ->
+        if List.for_all (String.equal "main") names then Provider.Explicit
+        else Provider.No_match
 
 let words line =
   String.split_on_char ' '

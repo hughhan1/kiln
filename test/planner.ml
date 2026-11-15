@@ -46,8 +46,27 @@ let () =
             (contains recipe {|RUN ["pnpm","run","build"]|})))
     [
       ("python", "python", [ ("requirements.txt", ""); ("main.py", "") ]);
-      ("go", "golang", [ ("go.mod", "module example\ngo 1.27\n") ]);
+      ( "go",
+        "golang",
+        [
+          ("go.mod", "module example\ngo 1.27\n"); ("main.go", "package main\n");
+        ] );
     ];
+  snapshot
+    [
+      ("go.mod", "module example\ngo 1.27\n");
+      ( "library.go",
+        "// Package library is imported, not run.\npackage library\n" );
+      ("generate.go", "//go:build ignore\n\npackage main\n");
+      ("server.js", "");
+      ("package.json", {|{"scripts":{"build":"vite build"}}|});
+    ]
+    "a Go library beside a Node server plans as Node"
+    (fun root ->
+      let recipe = recipe root [] in
+      check "with Node's image and not Go's"
+        (contains recipe "docker.io/library/node@"
+        && not (contains recipe "docker.io/library/golang@")));
   snapshot files "the C API returns the recipe" (fun root ->
       check "its dockerfile alone"
         (Yojson.Basic.from_string (ok (Kiln_io.Driver.plan (request root [])))
@@ -246,6 +265,7 @@ let () =
       ( "Go whose package.json declares its package manager and builds nothing",
         [
           ("go.mod", "module example\ngo 1.27\n");
+          ("main.go", "package main\n");
           ( "package.json",
             {|{"packageManager":"pnpm@11.25.0","dependencies":{"holon-sh":"^0.0.1"}}|}
           );
