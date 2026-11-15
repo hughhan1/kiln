@@ -1,5 +1,4 @@
 module Build_plan = Kiln_planning.Build_plan
-module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
 module Provider = Kiln_planning.Provider
@@ -82,7 +81,6 @@ type application = {
   integrity : Javascript.integrity option;
   manager : manager;
   install : Build_plan.argv;
-  install_commands : Build_plan.operation list -> Build_plan.operation list;
   inputs : inputs;
   build : Build_plan.operation list;
   command : Build_plan.argv option;
@@ -183,10 +181,7 @@ let load (request : Request.t) source =
       ~script:[ name pm; "run"; "start" ]
       ~main:[ "node" ]
   in
-  let inputs =
-    if Request.replaces_install request then Whole_source
-    else install_inputs source workspace packages
-  in
+  let inputs = install_inputs source workspace packages in
   let+ install =
     Build_plan.argv
       ([ name pm; "install" ]
@@ -204,12 +199,11 @@ let load (request : Request.t) source =
     integrity = pkg.Javascript.declared_integrity;
     manager = pm;
     install;
-    install_commands = Commands.expand request.Request.install_steps;
     inputs;
     build =
-      Commands.expand request.Request.build
-        (if Javascript.has_script pkg "build" then [ Build_plan.Run build_argv ]
-         else []);
+      (if Request.builds request && Javascript.has_script pkg "build" then
+         [ Build_plan.Run build_argv ]
+       else []);
     command;
   }
 
@@ -362,17 +356,15 @@ let unless test =
             @ arguments command)
         in
         Run command
-    | ( Copy _ | Workdir _ | Env _ | User _ | Entrypoint | Start _
-      | Prepend_path _ | Isolated _ ) as operation ->
+    | (Copy _ | Workdir _ | Env _ | User _ | Entrypoint | Start _ | Isolated _)
+      as operation ->
         Ok operation)
 
 let install_steps app copy_source =
   let install = Build_plan.Run app.install in
   match app.inputs with
-  | Whole_source -> copy_source :: app.install_commands [ install ]
-  | Manifests paths ->
-      app.install_commands (Source.manifests paths @ [ install ])
-      @ [ copy_source ]
+  | Whole_source -> [ copy_source; install ]
+  | Manifests paths -> Source.manifests paths @ [ install; copy_source ]
 
 let plan app r =
   let open Build_plan in
@@ -388,8 +380,7 @@ let plan app r =
           stage (Stage base) (Source.manifests paths @ [ Run native_install ])
         in
         let+ emulated = unless "[ ! -e .kiln-emulate ]" [ Run app.install ] in
-        app.install_commands (copy installed [ "/app/" ] "/app/" :: emulated)
-        @ [ copy_source ]
+        (copy installed [ "/app/" ] "/app/" :: emulated) @ [ copy_source ]
     | Manifests _ | Whole_source -> Ok (install_steps app copy_source)
   in
   let* build = stage (Stage builder) (steps @ app.build) in

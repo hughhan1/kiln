@@ -42,10 +42,7 @@ end
 
 type t = (module S)
 
-val select :
-  t list -> requested:string option -> Source.t -> (t, Error.t) result
-(** Detect every provider and prefer explicit evidence over fallback evidence.
-    Without a requested name, drop candidates another candidate includes.
-    Restrict selection to a requested public name when supplied, allowing an
-    undetected implementation if that name has no detection evidence. Require a
-    unique candidate and propagate malformed metadata. *)
+val select : t list -> Source.t -> (t, Error.t) result
+(** Detect every provider, prefer explicit evidence over fallback evidence, and
+    drop candidates another candidate includes. Require a unique candidate and
+    propagate malformed metadata. *)

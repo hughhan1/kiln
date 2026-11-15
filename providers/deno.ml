@@ -1,5 +1,4 @@
 module Build_plan = Kiln_planning.Build_plan
-module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
 module Jsonc = Kiln_planning.Jsonc
 module Provider = Kiln_planning.Provider
@@ -183,10 +182,11 @@ let prepare request source =
          mkdir;
          Source.copy ~exclude [ "." ] "/app/";
        ]
-      @ Commands.expand request.Request.install_steps [ Run install ]
-      @ Commands.expand request.Request.build
-          (if List.assoc_opt "build" tasks = Some true then [ Run build_argv ]
-           else []))
+      @ [ Run install ]
+      @
+      if Request.builds request && List.assoc_opt "build" tasks = Some true then
+        [ Run build_argv ]
+      else [])
   in
   stage (Image toolchain)
     [

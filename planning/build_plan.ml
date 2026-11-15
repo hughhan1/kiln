@@ -74,7 +74,6 @@ and operation =
   | User of int * int
   | Entrypoint
   | Start of argv option
-  | Prepend_path of string
   | Isolated of { command : argv; mounts : (input * string) list }
 
 let validate_operations operations =
@@ -91,7 +90,7 @@ let validate_operations operations =
                        s))
              exclude
         && Option.fold ~none:true ~some:(fun (u, g) -> u >= 0 && g >= 0) owner
-    | Workdir path | Prepend_path path -> path <> "" && single_line path
+    | Workdir path -> path <> "" && single_line path
     | User (u, g) -> u >= 0 && g >= 0
     | Isolated { mounts; _ } ->
         List.for_all
@@ -138,9 +137,7 @@ let stages root =
                 List.fold_left
                   (fun seen (from, _) -> input seen from)
                   seen mounts
-            | Run _ | Workdir _ | Env _ | User _ | Entrypoint | Start _
-            | Prepend_path _ ->
-                seen)
+            | Run _ | Workdir _ | Env _ | User _ | Entrypoint | Start _ -> seen)
           seen stage.operations
       in
       stage :: seen
@@ -249,7 +246,6 @@ let dockerfile root =
     | User (u, g) -> Printf.sprintf "USER %d:%d" u g
     | Entrypoint -> "ENTRYPOINT []"
     | Start args -> "CMD " ^ json (Option.fold ~none:[] ~some:arguments args)
-    | Prepend_path path -> "ENV PATH=" ^ docker_quote path ^ ":\"${PATH}\""
   in
   ignore (name root);
   Buffer.contents output

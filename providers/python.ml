@@ -1,5 +1,4 @@
 module Build_plan = Kiln_planning.Build_plan
-module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
 module Package = Kiln_planning.Package
 module Provider = Kiln_planning.Provider
@@ -51,7 +50,6 @@ type application = {
   installable : bool;
   start : Build_plan.argv option;
   build : Build_plan.operation list;
-  install_commands : Build_plan.operation list -> Build_plan.operation list;
 }
 
 type resolution = {
@@ -367,14 +365,12 @@ let load request source =
   let* dynamic = Toml.field root [ "project"; "dynamic" ] Otoml.get_value in
   let* dynamic_fields = Toml.strings root [ "project"; "dynamic" ] in
   let inputs =
-    if Request.replaces_install request then Whole_source
-    else
-      install_inputs source install ~installable ~requirements:pip_requirements
-        ~project:root_local
-        ~lock:(uv_lock_local || manager_lock_local)
-        ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
-        ~static_dependencies:
-          (Option.is_some name && not (List.mem "dependencies" dynamic_fields))
+    install_inputs source install ~installable ~requirements:pip_requirements
+      ~project:root_local
+      ~lock:(uv_lock_local || manager_lock_local)
+      ~uv_local:(Option.is_some workspace || Option.is_some dynamic)
+      ~static_dependencies:
+        (Option.is_some name && not (List.mem "dependencies" dynamic_fields))
   in
   let native =
     match (install, inputs) with
@@ -408,8 +404,7 @@ let load request source =
       native;
       installable;
       start;
-      install_commands = Commands.expand request.Request.install_steps;
-      build = Commands.expand request.Request.build frontend;
+      build = (if Request.builds request then frontend else []);
     }
 
 let resolve app =
@@ -606,7 +601,7 @@ let plan app resolved =
         let+ builder =
           stage (Image resolved.builder)
             ([ Workdir "/app"; Env env; venv ]
-            @ (copy_source :: app.install_commands (setup @ commands @ compile))
+            @ (copy_source :: (setup @ commands @ compile))
             @ app.build)
         in
         (builder, builder, finish)
@@ -665,18 +660,15 @@ let plan app resolved =
                     ]
               in
               ( [ copy base [ "/opt/venv/" ] "/opt/venv/" ]
-                @ app.install_commands
-                    [
-                      copy installed [ "/opt/venv/" ] "/opt/venv/";
-                      copy installed [ "/app/" ] "/app/";
-                      Run emulated;
-                    ],
+                @ [
+                    copy installed [ "/opt/venv/" ] "/opt/venv/";
+                    copy installed [ "/app/" ] "/app/";
+                    Run emulated;
+                  ],
                 finish )
           | None ->
               Ok
-                ( venv
-                  :: app.install_commands
-                       (Source.manifests paths @ setup @ commands @ compile),
+                ( venv :: (Source.manifests paths @ setup @ commands @ compile),
                   finish )
         in
         let* dependencies =

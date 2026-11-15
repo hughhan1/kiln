@@ -1,5 +1,4 @@
 module Build_plan = Kiln_planning.Build_plan
-module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
 module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
@@ -77,10 +76,11 @@ let prepare request source =
          Env [ ("BUN_INSTALL_GLOBAL_STORE", "0") ];
          Source.copy ~exclude [ "." ] "/app/";
        ]
-      @ Commands.expand request.Request.install_steps [ Run install ]
-      @ Commands.expand request.Request.build
-          (if Javascript.has_script root "build" then [ Run build_argv ] else [])
-      )
+      @ [ Run install ]
+      @
+      if Request.builds request && Javascript.has_script root "build" then
+        [ Run build_argv ]
+      else [])
   in
   stage (Image toolchain)
     [

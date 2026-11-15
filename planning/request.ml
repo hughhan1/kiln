@@ -8,14 +8,7 @@ type run = {
 }
 
 type kind = Image of { start : Build_plan.argv option } | Run of run
-
-type t = {
-  source : string;
-  install_steps : Commands.t;
-  provider : string option;
-  build : Commands.t;
-  kind : kind;
-}
+type t = { source : string; kind : kind }
 
 let argv label value =
   let* values = Json.list Json.string label value in
@@ -86,48 +79,9 @@ let kind fields =
 let decode fields =
   let* source = Json.field "source" Json.string fields in
   let+ kind = kind fields in
-  {
-    source;
-    install_steps = Commands.default;
-    provider = None;
-    build =
-      (match kind with Image _ -> Commands.default | Run _ -> Commands.none);
-    kind;
-  }
+  { source; kind }
 
 let start request =
   match request.kind with Image { start } -> start | Run _ -> None
 
-let replaces_install request = not (Commands.inherits request.install_steps)
-
-let commands name fields =
-  let* step =
-    Json.field name (Json.default [] (object_fields [ "commands" ])) fields
-  in
-  Json.field "commands" (Json.default Commands.default Commands.decode) step
-
-let configure_fields request fields =
-  let* provider = Json.field "provider" (Json.optional Json.string) fields in
-  let* steps =
-    Json.field "steps"
-      (Json.default [] (object_fields [ "install"; "build" ]))
-      fields
-  in
-  let* install_steps = commands "install" steps in
-  let+ build = commands "build" steps in
-  {
-    request with
-    provider;
-    install_steps;
-    build =
-      (match request.kind with Image _ -> build | Run _ -> Commands.none);
-  }
-
-let configure request source =
-  let path = "railpack.json" in
-  if Source.has source path then
-    let* bytes = source.Source.read path in
-    let* fields = Jsonc.object_ path bytes in
-    let* fields = check_fields [ "provider"; "steps" ] path fields in
-    configure_fields request fields
-  else Ok request
+let builds request = match request.kind with Image _ -> true | Run _ -> false

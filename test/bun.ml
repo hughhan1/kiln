@@ -5,12 +5,8 @@ let dockerfile root = Build_plan.dockerfile (ok (prepare root []))
 
 let () =
   snapshot
-    [
-      ("package.json", {|{"main":"main.ts"}|});
-      ("bun.lock", "");
-      ("railpack.json", {|{"provider":"node"}|});
-    ]
-    "the public Node provider selects the Bun implementation"
+    [ ("package.json", {|{"main":"main.ts"}|}); ("bun.lock", "") ]
+    "a bun.lock selects Bun"
     (fun root ->
       check "Bun planned" (contains (dockerfile root) "docker.io/oven/bun@"));
   snapshot
@@ -29,10 +25,7 @@ let () =
     ]
     "explicit runtimes are ambiguous"
     (fun root ->
-      check "ambiguous detection" (Result.is_error (prepare root []));
-      write root "railpack.json" {|{"provider":"bun"}|};
-      check "a configured provider still validates declarations"
-        (Result.is_error (prepare root [])));
+      check "ambiguous detection" (Result.is_error (prepare root [])));
   snapshot
     [
       ( "package.json",

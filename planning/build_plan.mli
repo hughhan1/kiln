@@ -48,7 +48,6 @@ type operation =
   | User of int * int
   | Entrypoint
   | Start of argv option
-  | Prepend_path of string
   | Isolated of { command : argv; mounts : (input * string) list }
       (** Run with no network, each input bind-mounted read-only at its absolute
           path. *)

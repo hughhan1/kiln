@@ -17,8 +17,7 @@ let step = function
   | Build_plan.Run argv -> Some (String.concat " " (Build_plan.arguments argv))
   | Build_plan.Copy { input = Build_plan.Output _ | Build_plan.External _; _ }
   | Build_plan.Workdir _ | Build_plan.Env _ | Build_plan.User _
-  | Build_plan.Entrypoint | Build_plan.Start _ | Build_plan.Prepend_path _
-  | Build_plan.Isolated _ ->
+  | Build_plan.Entrypoint | Build_plan.Start _ | Build_plan.Isolated _ ->
       None
 
 let own_steps stage = List.filter_map step (Build_plan.operations stage)
@@ -49,8 +48,7 @@ let venv_follows_source plan =
           | Build_plan.Context | Build_plan.External _ -> false)
       | Build_plan.Copy _ | Build_plan.Run _ | Build_plan.Workdir _
       | Build_plan.Env _ | Build_plan.User _ | Build_plan.Entrypoint
-      | Build_plan.Start _ | Build_plan.Prepend_path _ | Build_plan.Isolated _
-        ->
+      | Build_plan.Start _ | Build_plan.Isolated _ ->
           false)
     (Build_plan.operations plan)
 
@@ -325,42 +323,6 @@ let () =
         (ordered
            (steps (ok (prepare root [])))
            [ "manifest poetry.lock pyproject.toml"; "poetry install"; "source" ]));
-  List.iter
-    (fun (commands, expected, manifests) ->
-      snapshot
-        [ ("requirements.txt", "idna==3.10\n"); ("main.py", "") ]
-        ("install commands " ^ commands)
-        (fun root ->
-          write root "railpack.json"
-            ({|{"steps":{"install":{"commands":|} ^ commands ^ "}}}");
-          let plan = ok (prepare root []) in
-          let steps = steps plan in
-          check "configured commands take their place" (ordered steps expected);
-          check "inheritance selects the dependency layout"
-            (List.exists
-               (String.starts_with ~prefix:"manifest")
-               (all_steps plan)
-            = manifests)))
-    [
-      ( {|["python -c 'print(1)'", "..."]|},
-        [
-          "/bin/sh -c python -c 'print(1)'";
-          "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
-          "source";
-        ],
-        true );
-      ( {|["...", "python -c 'print(1)'"]|},
-        [
-          "/bin/sh -c [ ! -e /opt/venv/.kiln-emulate ]";
-          "/bin/sh -c python -c 'print(1)'";
-          "source";
-        ],
-        true );
-      ( {|["python -c 'print(1)'"]|},
-        (* The runtime copies /opt/venv, so replacing installation keeps it. *)
-        [ "python -m venv"; "source"; "/bin/sh -c python -c 'print(1)'" ],
-        false );
-    ];
   snapshot
     [
       ( "pyproject.toml",

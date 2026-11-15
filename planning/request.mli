@@ -1,5 +1,4 @@
-(** Validated preparation inputs: the request's source and kind, and the
-    commands and provider an app's railpack.json selects. *)
+(** Validated preparation inputs: the request's source and kind. *)
 
 type run = {
   command : Build_plan.argv;
@@ -16,26 +15,7 @@ type run = {
     [/status]. *)
 
 type kind = Image of { start : Build_plan.argv option } | Run of run
-
-type t = private {
-  source : string;
-  install_steps : Commands.t;
-      (** Configured [steps.install.commands], replacing the provider's install
-          block: its dependency manifest copies and installation. Environment
-          setup the runtime depends on, such as Python's [/opt/venv], stays
-          outside the block. The marker ["..."] stands for that block, so
-          commands before it are cached on the base image alone and commands
-          after it on the dependency set. Without the marker the provider copies
-          the whole source first. The full source copy and build commands follow
-          either way. When Python installs from manifests, the image takes
-          [/opt/venv] from a stage that ends with this block, so changes build
-          commands make to the venv are not part of the image; dependencies
-          change through these commands. Unconfigured, it is the marker alone.
-      *)
-  provider : string option;
-  build : Commands.t;  (** Configured [steps.build.commands]; none for a run. *)
-  kind : kind;
-}
+type t = private { source : string; kind : kind }
 
 val development : (string * Yojson.Basic.t) list -> bool
 (** Whether the JSON request is a development request: an empty [development]
@@ -49,11 +29,5 @@ val decode : (string * Yojson.Basic.t) list -> (t, Error.t) result
 val start : t -> Build_plan.argv option
 (** The startup an image request names. *)
 
-val configure : t -> Source.t -> (t, Error.t) result
-(** Read the source's railpack.json, when present, and apply its [provider], its
-    [steps.install] commands and, except for a run, its [steps.build] commands.
-*)
-
-val replaces_install : t -> bool
-(** Whether install commands without inheritance replace the provider's
-    installation, so it must see the whole source. *)
+val builds : t -> bool
+(** Whether the plan builds the app, as an image does and a run does not. *)

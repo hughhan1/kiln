@@ -86,14 +86,6 @@ let run (module P : Provider.S) plan
 
 let prepare (module P : Provider.S) (request : Request.t) source =
   let* plan = P.prepare request source in
-  let* plan =
-    Build_plan.stage (Build_plan.base plan)
-      (Build_plan.operations plan
-      @ List.map
-          (fun path -> Build_plan.Prepend_path path)
-          (Commands.paths request.Request.install_steps
-          @ Commands.paths request.Request.build))
-  in
   match request.Request.kind with
   | Request.Run command -> run (module P) plan command
   | Request.Image _ -> Ok plan

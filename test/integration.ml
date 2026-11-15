@@ -36,28 +36,6 @@ let container ~rejected source plan =
           (String.trim (docker [ "run"; "--rm"; "--network=none"; tag ])
           = "kiln smoke")))
 
-let configured_commands source =
-  Sys.remove (Filename.concat source "package.json");
-  write source "package.json"
-    {|{"main":"main.js","scripts":{"build":"test -f before && printf inherited >> order"},"dependencies":{"local":"file:packages/local"}}|};
-  write source "railpack.json"
-    {|{
-      "steps": {"build": {
-        "commands": [
-          "RUN#before:touch before && printf before > order", "...",
-          "COPY:main.js copied.js",
-          {"src":"main.js","dest":"object-copy.js"},
-          {"src":"/etc/os-release","dest":"image-release","image":"docker.io/library/node:24-bookworm-slim"},
-          "PATH:/app/first", {"path":"/app/$tools"},
-          "RUN#check:test \"${PATH%%:*}\" = '/app/$tools'",
-          {"cmd":"sh -c 'test -f copied.js && test -f object-copy.js && test -s image-release && test \"$(cat order)\" = beforeinherited'", "customName":"ordered commands"},
-          {"cmd":"node -e 'require(\"fs\").writeFileSync(\"args\", JSON.stringify(process.argv.slice(1)))' '' 'a b' \"quoted\" escaped\\ space '$literal'"},
-          "RUN#arguments:test \"$(cat args)\" = '[\"\",\"a b\",\"quoted\",\"escaped space\",\"$literal\"]'"
-        ]
-      }}
-    }|};
-  container ~rejected:false source (plan source)
-
 let run_command root source =
   let tooling = Filename.concat root "tooling" in
   let generated = Filename.concat root "generated" in
@@ -122,7 +100,6 @@ let exercise name =
       if Sys.file_exists rejected then (
         copy rejected source;
         container ~rejected:true source plan);
-      if name = "node-npm" then configured_commands source;
       if name = "python-pip" then run_command root source)
 
 let () =

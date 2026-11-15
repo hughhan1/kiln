@@ -15,13 +15,12 @@ Kiln is a library. Link the C SDK that `scripts/package PREFIX` builds
 (`ffi/kiln.h`, `libkiln.a`, `kiln.pc`) and pass `kiln_plan` a JSON request:
 
 ```json
-{"source": "/abs/app", "start": ["node", "server.js"]}
+{"source": "/abs/app", "image": {"start": ["node", "server.js"]}}
 ```
 
-A request names its `source` and may set `start` and `configFilePath` (default
-`railpack.json`). It returns `{"dockerfile": "..."}` to build with BuildKit. A
-request with `"development": true` names only its `source` and returns what a
-development environment runs, `{"install": [...], "build": [...]}`, each an
-array of argument vectors. A failure returns `{"error": "..."}`. An app's
-`railpack.json` may select its `provider` and its `steps.install` and
-`steps.build` commands.
+A request names its `source` and one kind. An `image` request, the default,
+returns `{"dockerfile": "..."}` to build with BuildKit. `"development": {}`
+returns what a development environment runs: `{"inputs": [...], "install":
+[...], "build": [...]}`. A `run` request returns the Dockerfile of an image that
+runs a command in the app's image. A failure returns `{"error": "..."}`. Kiln
+reads an app's manifests and nothing else: a `railpack.json` is ignored.

@@ -1,9 +1,9 @@
 module Build_plan = Kiln_planning.Build_plan
-module Commands = Kiln_planning.Commands
 module Json = Kiln_planning.Json
 module Provider = Kiln_planning.Provider
 module Request = Kiln_planning.Request
 module Source = Kiln_planning.Source
+module Support = Kiln_planning.Support
 module Semver = Kiln_planning.Semver
 module Error = Kiln_planning.Error
 open Result.Syntax
@@ -13,14 +13,64 @@ let public_name = id
 let includes = [ "node" ]
 let exclude = []
 
-let detect source =
-  Ok
-    (if Source.has source "go.mod" then Provider.Explicit else Provider.No_match)
-
 let words line =
   String.split_on_char ' '
     (String.map (fun c -> if c = '\t' then ' ' else c) line)
   |> List.filter (( <> ) "")
+
+let header text =
+  let rec close = function
+    | [] -> []
+    | line :: rest -> (
+        match String.find_first ~sub:"*/" line with
+        | None -> close rest
+        | Some i -> String.sub line (i + 2) (String.length line - i - 2) :: rest
+        )
+  in
+  let rec scan constraints = function
+    | [] -> (constraints, None)
+    | line :: rest -> (
+        let line = String.trim line in
+        let starts prefix = String.starts_with ~prefix line in
+        let expression prefix =
+          if starts prefix then
+            Some (String.trim (String.drop_first (String.length prefix) line))
+          else None
+        in
+        match List.find_map expression [ "//go:build"; "// +build" ] with
+        | Some build -> scan (build :: constraints) rest
+        | None -> (
+            if line = "" || starts "//" then scan constraints rest
+            else if starts "/*" then scan constraints (close (line :: rest))
+            else
+              match words line with
+              | "package" :: name :: _ -> (constraints, Some name)
+              | _ -> (constraints, None)))
+  in
+  scan [] (String.split_on_char '\n' text)
+
+let detect source =
+  if not (Source.has source "go.mod") then Ok Provider.No_match
+  else
+    let root path =
+      Filename.extension path = ".go"
+      && (not (String.contains path '/'))
+      && not (Filename.check_suffix path "_test.go")
+    in
+    let+ headers =
+      Support.traverse
+        (fun path -> Result.map header (source.Source.read path))
+        (List.filter root source.Source.files)
+    in
+    let main (constraints, name) =
+      name = Some "main" && not (List.mem "ignore" constraints)
+    in
+    let library (constraints, name) =
+      constraints = [] && Option.is_some name && name <> Some "main"
+    in
+    if List.exists main headers && not (List.exists library headers) then
+      Provider.Explicit
+    else Provider.No_match
 
 let directive name lines =
   let values =
@@ -111,8 +161,8 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
            ];
          Source.copy ~exclude [ "." ] "/app/";
        ]
-      @ Commands.expand request.Request.install_steps [ Run install ]
-      @ Commands.expand request.Request.build (frontend @ [ Run build ]))
+      @ [ Run install ]
+      @ if Request.builds request then frontend @ [ Run build ] else [])
   in
   stage (Image runtime)
     [

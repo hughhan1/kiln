@@ -69,7 +69,10 @@ let () =
         images Pins.uv,
         (last Pins.uv).Pins.image );
       ( "go",
-        [ ("go.mod", "module example\ngo " ^ oldest_go.Pins.version ^ "\n") ],
+        [
+          ("go.mod", "module example\ngo " ^ oldest_go.Pins.version ^ "\n");
+          ("main.go", "package main\n");
+        ],
         (fun version ->
           [
             ( "go.mod",
