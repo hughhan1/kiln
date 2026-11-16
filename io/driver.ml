@@ -18,15 +18,10 @@ let filesystem action =
 let read path = In_channel.with_open_bin path In_channel.input_all
 let check cancelled = if cancelled () then Error Error.Cancelled else Ok ()
 
-let contained exclude root path =
-  (path = root || String.starts_with ~prefix:(Filename.concat root "") path)
-  && not
-       (List.exists
-          (fun part -> List.mem part exclude)
-          (String.split_on_char '/'
-             (String.drop_first (String.length root) path)))
+let contained root path =
+  path = root || String.starts_with ~prefix:(Filename.concat root "") path
 
-let rec walk cancelled exclude root relative =
+let rec walk cancelled root relative =
   let* () = check cancelled in
   let dir = Filename.concat root relative in
   let entries = List.sort String.compare (Array.to_list (Sys.readdir dir)) in
@@ -34,28 +29,26 @@ let rec walk cancelled exclude root relative =
     let* () = check cancelled in
     let path = Filename.concat dir entry in
     let rel = Filename.concat relative entry in
-    if List.mem entry exclude then Ok ([], false)
-    else
-      match (Unix.lstat path).Unix.st_kind with
-      | Unix.S_DIR -> walk cancelled exclude root rel
-      | Unix.S_REG -> Ok ([ rel ], false)
-      | Unix.S_LNK ->
-          if contained exclude root (Unix.realpath path) then Ok ([ rel ], true)
-          else Error (Error.Containment rel)
-      | Unix.S_CHR | Unix.S_BLK | Unix.S_FIFO | Unix.S_SOCK ->
-          Error (Error.Unsupported "source contains non-regular file")
+    match (Unix.lstat path).Unix.st_kind with
+    | Unix.S_DIR -> walk cancelled root rel
+    | Unix.S_REG -> Ok ([ rel ], false)
+    | Unix.S_LNK ->
+        if contained root (Unix.realpath path) then Ok ([ rel ], true)
+        else Error (Error.Containment rel)
+    | Unix.S_CHR | Unix.S_BLK | Unix.S_FIFO | Unix.S_SOCK ->
+        Error (Error.Unsupported "source contains non-regular file")
   in
   let* results = Support.traverse visit entries in
   Ok (List.concat_map fst results, List.exists snd results)
 
-let source cancelled root exclude files links =
+let source cancelled root files links =
   let resolve path =
     let* () = check cancelled in
     let absolute =
       Unix.realpath
         (if Filename.is_relative path then Filename.concat root path else path)
     in
-    if contained exclude root absolute then Ok absolute
+    if contained root absolute then Ok absolute
     else Error (Error.Containment path)
   in
   {
@@ -87,10 +80,8 @@ let directory path =
 
 let planned cancelled providers root probe plan =
   let* provider = Provider.select providers probe in
-  let (module P : Provider.S) = provider in
-  let exclude = Source.omitted @ P.exclude in
-  let* files, links = walk cancelled exclude root "" in
-  let* planned = plan provider (source cancelled root exclude files links) in
+  let* files, links = walk cancelled root "" in
+  let* planned = plan provider (source cancelled root files links) in
   let+ () = check cancelled in
   planned
 
@@ -100,16 +91,15 @@ let prepare ?(providers = Kiln_providers.Builtin.all)
   filesystem @@ fun () ->
   let* () = check cancelled in
   let* root, files = directory request.Request.source in
-  planned cancelled providers root
-    (source cancelled root [ ".git" ] files false) (fun provider source ->
-      Planner.prepare provider request source)
+  planned cancelled providers root (source cancelled root files false)
+    (fun provider source -> Planner.prepare provider request source)
 
 let develop providers cancelled path =
   filesystem @@ fun () ->
   let* () = check cancelled in
   let* root, files = directory path in
   planned cancelled providers root
-    (source cancelled root [ ".git" ] files false)
+    (source cancelled root files false)
     Planner.develop
 
 let plan ?(providers = Kiln_providers.Builtin.all)

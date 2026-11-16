@@ -10,7 +10,6 @@ module Error = Kiln_planning.Error
 let id = "bun"
 let public_name = "node"
 let includes = []
-let exclude = [ ".bun" ]
 let locks = [ "bun.lock"; "bun.lockb" ]
 
 let detect source =
@@ -74,7 +73,7 @@ let prepare request source =
          User (0, 0);
          Workdir "/app";
          Env [ ("BUN_INSTALL_GLOBAL_STORE", "0") ];
-         Source.copy ~exclude [ "." ] "/app/";
+         Source.copy [ "." ] "/app/";
        ]
       @ [ Run install ]
       @

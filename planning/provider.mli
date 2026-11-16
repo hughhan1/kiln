@@ -19,10 +19,6 @@ module type S = sig
   (** Public provider name used for configuration. Multiple implementations may
       share a name. *)
 
-  val exclude : string list
-  (** Directory/file basenames omitted throughout the source snapshot, besides
-      [Source.omitted]. *)
-
   val includes : string list
   (** Public names of providers whose part of a source this provider builds
       itself, such as Node for a page; they yield to it in detection. *)

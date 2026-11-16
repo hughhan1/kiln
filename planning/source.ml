@@ -13,10 +13,9 @@ let check_reference source ~from reference =
 
 let has source path = List.mem path source.files
 let everywhere = List.concat_map (fun name -> [ name; "**/" ^ name ])
-let omitted = [ ".git"; "node_modules"; ".venv"; "venv" ]
 
-let copy ~exclude paths destination =
-  Build_plan.context ~exclude:(everywhere (omitted @ exclude)) paths destination
+let copy ?(exclude = []) paths destination =
+  Build_plan.context ~exclude:(everywhere exclude) paths destination
 
 let manifests paths =
   let module Directories = Map.Make (String) in

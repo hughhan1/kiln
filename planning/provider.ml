@@ -11,7 +11,6 @@ type steps = {
 module type S = sig
   val id : string
   val public_name : string
-  val exclude : string list
   val includes : string list
   val detect : Source.t -> (detection, Error.t) result
   val prepare : Request.t -> Source.t -> (Build_plan.t, Error.t) result

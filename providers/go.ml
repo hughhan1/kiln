@@ -11,7 +11,6 @@ open Result.Syntax
 let id = "go"
 let public_name = id
 let includes = [ "node" ]
-let exclude = []
 
 let words line =
   String.split_on_char ' '
@@ -133,7 +132,7 @@ let prepare request source =
   in
   let* install = Build_plan.argv [ "go"; "mod"; "download"; "all" ] in
   let* frontend =
-    Node.frontend ~exclude:([ "*.go"; "go.mod"; "go.sum" ] @ exclude) source
+    Node.frontend ~exclude:[ "*.go"; "go.mod"; "go.sum" ] source
   in
   let* build =
     Build_plan.shell
@@ -159,7 +158,7 @@ go build -mod=readonly -trimpath -o /app/bin/server .|}
              ("GOFLAGS", "-mod=readonly");
              ("GOWORK", "off");
            ];
-         Source.copy ~exclude [ "." ] "/app/";
+         Source.copy [ "." ] "/app/";
        ]
       @ [ Run install ]
       @ if Request.builds request then frontend @ [ Run build ] else [])
