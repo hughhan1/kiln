@@ -1,8 +1,8 @@
 (** A contained, read-only snapshot. [files] are source-relative names; [links]
     records symlink presence. [read] accepts contained relative or absolute
     paths. [resolve_reference] resolves relative to the manifest named by
-    [from], returning a canonical absolute path and rejecting missing, excluded,
-    or escaping targets. *)
+    [from], returning a canonical absolute path and rejecting missing or
+    escaping targets. *)
 
 type t = {
   files : string list;
@@ -26,13 +26,8 @@ val workspace : string list -> (unit, Error.t) result
 (** Reject absolute workspace patterns and parent-directory components,
     including negated patterns. *)
 
-val copy : exclude:string list -> string list -> string -> Build_plan.operation
-(** Copy snapshot paths while excluding [omitted] and provider exclusions at
-    every depth. *)
-
-val omitted : string list
-(** Directory basenames left out of every snapshot at every depth: version
-    control, and the packages installed for Node.js and Python. *)
+val copy : ?exclude:string list -> string list -> string -> Build_plan.operation
+(** Copy snapshot paths, leaving out the [exclude] basenames at every depth. *)
 
 val manifests : string list -> Build_plan.operation list
 (** Copy listed snapshot files to their own paths under the working directory,

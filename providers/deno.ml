@@ -10,7 +10,6 @@ open Result.Syntax
 let id = "deno"
 let public_name = id
 let includes = []
-let exclude = [ ".deno" ]
 let configs = [ "deno.json"; "deno.jsonc" ]
 
 let detect source =
@@ -180,7 +179,7 @@ let prepare request source =
          Workdir "/app";
          Env env;
          mkdir;
-         Source.copy ~exclude [ "." ] "/app/";
+         Source.copy [ "." ] "/app/";
        ]
       @ [ Run install ]
       @

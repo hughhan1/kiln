@@ -67,7 +67,7 @@ let () =
         < position {|--cpu=\"$cpu\" --libc=glibc --ignore-scripts|});
       check "the emulated fallback and the source copy follow"
         (position {|--ignore-scripts|} < position {|"npm","install"]|}
-        && position {|"npm","install"]|} < position {|COPY --exclude|});
+        && position {|"npm","install"]|} < position {|COPY [".","."]|});
       check "main startup" (contains dockerfile {|CMD ["node","main.js"]|}));
   List.iter
     (fun (label, pkg) ->
@@ -125,23 +125,7 @@ let () =
       ("null", "expected object");
       ("{broken", "package.json");
     ];
-  (* Source filtering and containment. *)
-  snapshot ".git and node_modules stay out of planning" (fun root ->
-      let initial = result root [] in
-      List.iter
-        (fun dir ->
-          Unix.mkdir (Filename.concat root dir) 0o700;
-          write root (dir ^ "/package.json") "invalid ignored metadata")
-        [ ".git"; "node_modules" ];
-      let project = result root [] in
-      check "their contents do not change the plan" (project = initial);
-      write root "package.json"
-        {|{"main":"main.js","dependencies":{"local":"file:node_modules"}}|};
-      failure "escapes" (run root []);
-      write root "package.json" base;
-      Unix.symlink "node_modules/package.json"
-        (Filename.concat root "linked.json");
-      failure "escapes" (run root []));
+  (* Source containment. *)
   List.iter
     (fun (setup, message) ->
       snapshot message (fun root ->

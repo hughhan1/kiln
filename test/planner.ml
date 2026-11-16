@@ -111,15 +111,6 @@ let () =
           ];
           [ ("image", `Assoc []); ("development", `Assoc []) ];
         ]);
-  snapshot files "installed packages stay out of the source" (fun root ->
-      Unix.mkdir (Filename.concat root "node_modules") 0o700;
-      write root "node_modules/package.json" "[";
-      Unix.mkdir (Filename.concat root ".venv") 0o700;
-      Unix.symlink "/usr/bin/env" (Filename.concat root ".venv/python");
-      let recipe = recipe root [] in
-      check "they are neither read nor copied"
-        (contains recipe "--exclude=**/node_modules "
-        && contains recipe "--exclude=**/.venv "));
   snapshot
     [
       ("requirements.txt", "");

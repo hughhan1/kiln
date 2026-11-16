@@ -302,7 +302,6 @@ let resolve app =
 let id = "node"
 let public_name = id
 let includes = []
-let exclude = []
 
 (* npm honours --libc from 10.4. A replaced install command always copies the
    whole source, and pnpm has no equivalent flags. *)
@@ -370,7 +369,7 @@ let plan app r =
   let open Build_plan in
   let pm = name r.pm in
   let* builder = toolchain r (Image r.builder) in
-  let copy_source = Source.copy ~exclude [ "." ] "." in
+  let copy_source = Source.copy [ "." ] "." in
   let* steps =
     match app.inputs with
     | Manifests paths when native app r ->
