@@ -60,8 +60,8 @@ let kinds = [ "image"; "development"; "run" ]
 
 let development fields =
   match List.filter (fun (key, _) -> List.mem key kinds) fields with
-  | [ ("development", `Assoc []) ] -> true
-  | _ -> false
+  | [ ("development", value) ] -> Some (startup "development" value)
+  | _ -> None
 
 let kind fields =
   match List.filter (fun (key, _) -> List.mem key kinds) fields with
@@ -72,9 +72,7 @@ let kind fields =
   | [ ("run", value) ] ->
       let+ run = run "run" value in
       Run run
-  | _ ->
-      Json.metadata "request"
-        "expected one of image, run and an empty development object"
+  | _ -> Json.metadata "request" "expected one of image, run and development"
 
 let decode fields =
   let* source = Json.field "source" Json.string fields in

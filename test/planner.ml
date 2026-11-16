@@ -169,19 +169,41 @@ let () =
     ]
   in
   let uv_lock = ("uv.lock", "version = 1\nrequires-python = \">=3.12\"\n") in
+  let develop root fields =
+    Result.map
+      (fun response -> Yojson.Basic.from_string response)
+      (Kiln_io.Driver.plan (request root [ ("development", `Assoc fields) ]))
+  in
+  let start = [ ("start", Json.string_array [ "serve"; "server.py" ]) ] in
+  let digest plan =
+    Yojson.Basic.Util.(plan |> member "install" |> member "inputs")
+  in
+  let without_digest = function
+    | `Assoc (("install", `Assoc (("inputs", _) :: install)) :: plan) ->
+        `Assoc (("install", `Assoc install) :: plan)
+    | plan -> plan
+  in
+  snapshot files "a development request without a start plans none" (fun root ->
+      check "no start"
+        (Yojson.Basic.Util.member "start" (ok (develop root [])) = `Null));
   List.iter
     (fun (name, files, expected) ->
-      snapshot files ("development steps: " ^ name) (fun root ->
-          let planned =
-            Kiln_io.Driver.plan (request root [ ("development", `Assoc []) ])
-          in
-          match (planned, expected) with
-          | Ok response, Some steps ->
-              check "the steps"
-                (Yojson.Basic.from_string response
-                = Yojson.Basic.from_string steps)
+      snapshot files ("development plan: " ^ name) (fun root ->
+          match (develop root start, expected) with
+          | Ok plan, Some (inputs, expected) ->
+              check "the plan"
+                (without_digest plan = Yojson.Basic.from_string expected);
+              List.iter
+                (fun (file, contents) ->
+                  let before = digest (ok (develop root start)) in
+                  write root file (contents ^ "\n");
+                  check
+                    (file ^ " changes the install's inputs only if one")
+                    (digest (ok (develop root start))
+                    <> before = List.mem file inputs))
+                files
           | Error _, None -> ()
-          | Ok response, None -> failwith ("planned: " ^ response)
+          | Ok plan, None -> failwith ("planned: " ^ Yojson.Basic.to_string plan)
           | Error error, Some _ -> failwith (Kiln_planning.Error.show error)))
     [
       ( "pnpm leaves its lockfile unfrozen, for an image Kiln cannot plan",
@@ -191,20 +213,29 @@ let () =
           ("pnpm-lock.yaml", "");
         ],
         Some
-          {|{"inputs":["package.json","pnpm-lock.yaml"],"install":[["pnpm","install"]],"build":[["pnpm","run","build"]]}|}
-      );
+          ( [ "package.json"; "pnpm-lock.yaml" ],
+            {|{"install":{"commands":[["pnpm","install"]]},"prepare":[["pnpm","run","build"]],"start":["serve","server.py"]}|}
+          ) );
       ( "uv with a page, reinstalled when a manifest changes",
         uv_lock :: ("package.json", page)
         :: (".python-version", "3.13\n")
         :: (".npmrc", "") :: python,
         Some
-          {|{"inputs":[".python-version","pyproject.toml","uv.lock",".npmrc","package.json"],"install":[["uv","sync"],["npm","install"]],"build":[["npm","run","build"]]}|}
-      );
+          ( [
+              ".python-version";
+              "pyproject.toml";
+              "uv.lock";
+              ".npmrc";
+              "package.json";
+            ],
+            {|{"install":{"commands":[["uv","sync"],["npm","install"]]},"prepare":[["npm","run","build"]],"start":["uv","run","--no-sync","serve","server.py"]}|}
+          ) );
       ( "uv alone",
         uv_lock :: python,
         Some
-          {|{"inputs":["pyproject.toml","uv.lock"],"install":[["uv","sync"]],"build":[]}|}
-      );
+          ( [ "pyproject.toml"; "uv.lock" ],
+            {|{"install":{"commands":[["uv","sync"]]},"prepare":[],"start":["uv","run","--no-sync","serve","server.py"]}|}
+          ) );
       ("Python without uv.lock", python, None);
       ( "Go whose package.json declares its package manager and builds nothing",
         [
@@ -215,13 +246,15 @@ let () =
           );
         ],
         Some
-          {|{"inputs":["package.json"],"install":[["pnpm","install"]],"build":[]}|}
-      );
+          ( [ "package.json" ],
+            {|{"install":{"commands":[["pnpm","install"]]},"prepare":[],"start":["serve","server.py"]}|}
+          ) );
       ( "Node beside a Python version file",
         [ ("package.json", "{}"); (".python-version", "3.13\n") ],
         Some
-          {|{"inputs":["package.json"],"install":[["npm","install"]],"build":[]}|}
-      );
+          ( [ "package.json" ],
+            {|{"install":{"commands":[["npm","install"]]},"prepare":[],"start":["serve","server.py"]}|}
+          ) );
       ("Bun", [ ("package.json", {|{"packageManager":"bun@1"}|}) ], None);
     ];
   finish ()

@@ -1,20 +1,39 @@
 open Result.Syntax
 
-let develop (module P : Provider.S) source =
-  let+ { Provider.inputs; install; build } = P.develop source in
-  let commands steps =
-    `List
-      (List.map
-         (fun command -> Json.string_array (Build_plan.arguments command))
-         steps)
+let develop (module P : Provider.S) source start =
+  let* { Provider.inputs; install; build; launcher } = P.develop source in
+  let+ read =
+    Support.traverse
+      (fun path ->
+        let+ contents = source.Source.read path in
+        [
+          path; "\000"; string_of_int (String.length contents); "\000"; contents;
+        ])
+      inputs
+  in
+  let digest =
+    Digestif.SHA256.digesti_string (fun feed -> List.iter (List.iter feed) read)
+  in
+  let argv command = Json.string_array (Build_plan.arguments command) in
+  let commands steps = `List (List.map argv steps) in
+  let start =
+    match start with
+    | None -> []
+    | Some start ->
+        [ ("start", Json.string_array (launcher @ Build_plan.arguments start)) ]
   in
   Json.encode
     (`Assoc
-       [
-         ("inputs", Json.string_array inputs);
-         ("install", commands install);
-         ("build", commands build);
-       ])
+       ([
+          ( "install",
+            `Assoc
+              [
+                ("inputs", `String ("sha256:" ^ Digestif.SHA256.to_hex digest));
+                ("commands", commands install);
+              ] );
+          ("prepare", commands build);
+        ]
+       @ start))
 
 let output = "/tmp/kiln-run"
 

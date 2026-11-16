@@ -6,6 +6,7 @@ type steps = {
   inputs : string list;
   install : Build_plan.argv list;
   build : Build_plan.argv list;
+  launcher : string list;
 }
 
 module type S = sig

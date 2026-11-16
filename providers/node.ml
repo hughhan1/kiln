@@ -430,7 +430,7 @@ let prepare request source =
 
 let develop source =
   if not (Source.has source "package.json") then
-    Ok { Provider.inputs = []; install = []; build = [] }
+    Ok { Provider.inputs = []; install = []; build = []; launcher = [] }
   else
     let* pkg = Javascript.root source in
     let* pm = selected_manager pkg source in
@@ -447,6 +447,7 @@ let develop source =
           source.Source.files;
       install = [ install ];
       build;
+      launcher = [];
     }
 
 let frontend ~exclude source =
