@@ -18,4 +18,5 @@ val plan :
   (string, Kiln_planning.Error.t) result
 (** Parse JSON request text and return the C API's JSON response: the image
     plan, or for a [development] request, which names only its [source] and
-    reads no configuration, {!Kiln_planning.Planner.develop}'s steps. *)
+    [start] and reads no configuration, {!Kiln_planning.Planner.develop}'s plan.
+*)

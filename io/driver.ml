@@ -94,20 +94,21 @@ let prepare ?(providers = Kiln_providers.Builtin.all)
   planned cancelled providers root (source cancelled root files false)
     (fun provider source -> Planner.prepare provider request source)
 
-let develop providers cancelled path =
+let develop providers cancelled path start =
   filesystem @@ fun () ->
   let* () = check cancelled in
   let* root, files = directory path in
-  planned cancelled providers root
-    (source cancelled root files false)
-    Planner.develop
+  planned cancelled providers root (source cancelled root files false)
+    (fun provider source -> Planner.develop provider source start)
 
 let plan ?(providers = Kiln_providers.Builtin.all)
     ?(cancelled = fun () -> false) bytes =
   let* fields = Json.decode "request" Json.object_ bytes in
-  if Request.development fields then
-    let* source = Json.field "source" Json.string fields in
-    develop providers cancelled source
-  else
-    let+ plan = prepare ~providers ~cancelled fields in
-    Planner.encode plan
+  match Request.development fields with
+  | Some start ->
+      let* start = start in
+      let* source = Json.field "source" Json.string fields in
+      develop providers cancelled source start
+  | None ->
+      let+ plan = prepare ~providers ~cancelled fields in
+      Planner.encode plan

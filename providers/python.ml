@@ -736,6 +736,7 @@ let develop source =
           source.Source.files
         @ page.Provider.inputs;
       install = sync :: page.Provider.install;
+      launcher = [ "uv"; "run"; "--no-sync" ];
     }
 
 let prepare request source =

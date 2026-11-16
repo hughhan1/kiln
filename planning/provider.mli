@@ -7,9 +7,11 @@ type steps = {
   inputs : string list;
   install : Build_plan.argv list;
   build : Build_plan.argv list;
+  launcher : string list;
 }
 (** What a development environment runs in the source directory: [install]
-    whenever a file in [inputs] changes, then [build]. *)
+    whenever a file in [inputs] changes, then [build], then the app's start
+    command after [launcher]. *)
 
 module type S = sig
   val id : string
