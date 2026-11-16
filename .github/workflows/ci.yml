@@ -2,7 +2,6 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: [v*]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -83,26 +82,27 @@ jobs:
           path: kiln-${{ matrix.target }}.tar.gz
           if-no-files-found: error
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push'
     needs: [package, integration]
     runs-on: ubuntu-24.04
     permissions:
+      attestations: write
       contents: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: kiln-*
           path: release
           merge-multiple: true
-      - name: Publish release assets
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: release/kiln-*.tar.gz
+      - name: Publish the SDK built from this commit
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
-        shell: bash
         run: |
-          set -euo pipefail
-          test "$VERSION" = "v$(sed -n 's/^version: "\(.*\)"/\1/p' kiln_ocaml.opam)"
-          cd release
-          sha256sum kiln-*.tar.gz > checksums.txt
-          gh release create "$VERSION" --verify-tag --title "Kiln $VERSION" --generate-notes ./*
+          gh release create "sdk-$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "SDK at ${GITHUB_SHA::7}" \
+            --notes "The C SDK built from $GITHUB_SHA. Check a download with \`gh attestation verify FILE --repo $GITHUB_REPOSITORY --source-digest $GITHUB_SHA\`." \
+            release/kiln-*.tar.gz

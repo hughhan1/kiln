@@ -11,8 +11,10 @@ for each release.
 
 ## Use
 
-Kiln is a library. Link the C SDK that `scripts/package PREFIX` builds
-(`ffi/kiln.h`, `libkiln.a`, `kiln.pc`) and pass `kiln_plan` a JSON request:
+Kiln is a library. Every commit on `main` publishes its C SDK (`kiln.h`,
+`libkiln.a`, `kiln.pc`) for Linux and macOS as `kiln-<os>_<arch>.tar.gz` under
+the release `sdk-<commit>`, and `scripts/package PREFIX` builds it from source.
+Link it and pass `kiln_plan` a JSON request:
 
 ```json
 {"source": "/abs/app", "image": {"start": ["node", "server.js"]}}
