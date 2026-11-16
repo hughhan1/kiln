@@ -2,7 +2,6 @@ open Result.Syntax
 
 let develop (module P : Provider.S) source start =
   let* { Provider.inputs; install; build; launcher } = P.develop source in
-  let* start = Build_plan.argv (launcher @ Build_plan.arguments start) in
   let+ read =
     Support.traverse
       (fun path ->
@@ -17,18 +16,24 @@ let develop (module P : Provider.S) source start =
   in
   let argv command = Json.string_array (Build_plan.arguments command) in
   let commands steps = `List (List.map argv steps) in
+  let start =
+    match start with
+    | None -> []
+    | Some start ->
+        [ ("start", Json.string_array (launcher @ Build_plan.arguments start)) ]
+  in
   Json.encode
     (`Assoc
-       [
-         ( "install",
-           `Assoc
-             [
-               ("inputs", `String ("sha256:" ^ Digestif.SHA256.to_hex digest));
-               ("commands", commands install);
-             ] );
-         ("prepare", commands build);
-         ("start", argv start);
-       ])
+       ([
+          ( "install",
+            `Assoc
+              [
+                ("inputs", `String ("sha256:" ^ Digestif.SHA256.to_hex digest));
+                ("commands", commands install);
+              ] );
+          ("prepare", commands build);
+        ]
+       @ start))
 
 let output = "/tmp/kiln-run"
 

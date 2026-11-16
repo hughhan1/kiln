@@ -60,10 +60,7 @@ let kinds = [ "image"; "development"; "run" ]
 
 let development fields =
   match List.filter (fun (key, _) -> List.mem key kinds) fields with
-  | [ ("development", value) ] ->
-      Some
-        (let* fields = object_fields [ "start" ] "development" value in
-         Json.field "start" argv fields)
+  | [ ("development", value) ] -> Some (startup "development" value)
   | _ -> None
 
 let kind fields =

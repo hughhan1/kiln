@@ -6,11 +6,11 @@ val prepare :
     additions to its final stage. *)
 
 val develop :
-  Provider.t -> Source.t -> Build_plan.argv -> (string, Error.t) result
+  Provider.t -> Source.t -> Build_plan.argv option -> (string, Error.t) result
 (** The JSON of the plan a development environment follows in the source:
     [install], whose [commands] rerun whenever its [inputs] digest of the files
-    they install from changes; then the [prepare] commands and the [start]
-    argument vector. *)
+    they install from changes; then the [prepare] commands and, given a start
+    command, the [start] argument vector. *)
 
 val encode : Build_plan.t -> string
 (** The JSON of the plan: its [dockerfile]. *)

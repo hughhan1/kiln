@@ -18,9 +18,10 @@ type kind = Image of { start : Build_plan.argv option } | Run of run
 type t = private { source : string; kind : kind }
 
 val development :
-  (string * Yojson.Basic.t) list -> (Build_plan.argv, Error.t) result option
-(** The [start] argument vector of a development request: a [development] object
-    naming only [start], and no other kind. *)
+  (string * Yojson.Basic.t) list ->
+  (Build_plan.argv option, Error.t) result option
+(** The optional [start] argument vector of a development request: a
+    [development] object naming at most [start], and no other kind. *)
 
 val decode : (string * Yojson.Basic.t) list -> (t, Error.t) result
 (** Decode the JSON request's [source] and its one kind: an [image] object with

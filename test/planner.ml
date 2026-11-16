@@ -183,8 +183,9 @@ let () =
         `Assoc (("install", `Assoc install) :: plan)
     | plan -> plan
   in
-  snapshot files "a development request names its start" (fun root ->
-      check "rejected without one" (Result.is_error (develop root [])));
+  snapshot files "a development request without a start plans none" (fun root ->
+      check "no start"
+        (Yojson.Basic.Util.member "start" (ok (develop root [])) = `Null));
   List.iter
     (fun (name, files, expected) ->
       snapshot files ("development plan: " ^ name) (fun root ->

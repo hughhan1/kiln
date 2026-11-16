@@ -23,7 +23,7 @@ returns `{"dockerfile": "..."}` to build with BuildKit. `"development":
 {"start": [...]}` returns the plan a development environment follows:
 `{"install": {"inputs": "sha256:...", "commands": [...]}, "prepare": [...],
 "start": [...]}`, its install rerun whenever the digest of the files it
-installs from changes, and its start run through the app's package manager. A
-`run` request returns the Dockerfile of an image that runs a command in the
-app's image. A failure returns `{"error": "..."}`. Kiln reads an app's
+installs from changes, and its start, given one, run through the app's package
+manager. A `run` request returns the Dockerfile of an image that runs a command
+in the app's image. A failure returns `{"error": "..."}`. Kiln reads an app's
 manifests and nothing else: a `railpack.json` is ignored.
